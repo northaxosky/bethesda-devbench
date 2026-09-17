@@ -6,10 +6,14 @@
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
     "esModuleInterop": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
-    "declaration": false,
-    "sourceMap": false
+    "declaration": true,
+    "sourceMap": true
   },
-  "include": ["src"]
+  "include": ["src/**/*.ts"]
 }

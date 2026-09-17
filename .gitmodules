@@ -1,7 +1,6 @@
-[submodule "lib/commonlibsse-ng"]
-	path = lib/commonlibsse-ng
-	url = https://github.com/alandtse/CommonLibVR.git
-	branch = ng
+[submodule "lib/commonlibf4"]
+	path = lib/commonlibf4
+	url = https://github.com/Dear-Modding-FO4/commonlibf4.git
 [submodule "lib/cpp-mcp"]
 	path = lib/cpp-mcp
 	url = https://github.com/hkr04/cpp-mcp.git

@@ -1,0 +1,38 @@
+#pragma once
+
+#include <atomic>
+#include <chrono>
+#include <functional>
+
+#include "Json.h"
+
+namespace dvb::MainThread
+{
+	/// Run `a_fn` on the main game thread (via SKSE's TaskInterface) and block the
+	/// calling (listener) thread until it returns, propagating its JSON result — or
+	/// rethrowing whatever it threw (e.g. a dvb::ToolError) on the caller's thread.
+	///
+	/// This is the value-returning primitive that lets tools read live game/render
+	/// state synchronously (the agentic-renderdoc "Eval returns a value" model)
+	/// rather than fire-and-forget + poll. Throws dvb::ToolError(504) if the task
+	/// does not run within `a_timeout` (e.g. the main thread is stalled mid-load).
+	///
+	/// MUST be called from a non-main thread (the server listener). Calling it on the
+	/// main thread would deadlock — the task can never run while this blocks.
+	///
+	/// a_keepWaiting: optional liveness flag. If it clears mid-wait, RunAndWait returns
+	/// json(nullptr) at once (the caller stopped waiting, e.g. the recorder shutting down)
+	/// instead of blocking the full timeout; the queued task is abandoned safely.
+	json RunAndWait(std::function<json()> a_fn,
+		std::chrono::milliseconds         a_timeout = std::chrono::milliseconds(5000),
+		const std::atomic<bool>*          a_keepWaiting = nullptr);
+
+	/// Engine frame at which the most recently queued main-thread task finished (success or
+	/// throw), or -1 if none has run yet. Lock-free; safe to call from the listener thread.
+	/// Paired with PendingTasks() it distinguishes a busy-but-draining queue from a starved
+	/// one: PendingTasks() > 0 while this stops advancing = tasks aren't completing.
+	int LastCompletedFrame();
+
+	/// Main-thread tasks queued via RunAndWait but not yet finished. Lock-free; listener-safe.
+	int PendingTasks();
+}

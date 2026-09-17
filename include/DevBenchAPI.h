@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: MIT
 //
-// This interface header and its companion DevBenchAPI.cpp are MIT-licensed (see
-// DevBenchAPI.LICENSE.txt) so ANY SKSE plugin — including proprietary/closed-source —
-// may vendor them to talk to devbench, independent of the devbench plugin's GPL-3.0.
-// They are self-contained: drop both files into your plugin (or consume the
-// devbench-api vcpkg port) and build — no other devbench source is needed.
+// This interface header, DevBenchAPIVersion.h, and companion DevBenchAPI.cpp are
+// MIT-licensed (see DevBenchAPI.LICENSE.txt) so ANY F4SE plugin — including
+// proprietary/closed-source — may vendor them to talk to devbench, independent
+// of the devbench plugin's GPL-3.0. Drop all three files into your plugin (or
+// consume the devbench-api vcpkg port) and build — no other devbench source is needed.
 #pragma once
+
+#include "DevBenchAPIVersion.h"
 
 #include <cstdint>
 
-#include <RE/Skyrim.h>
-#include <SKSE/SKSE.h>
+#include <F4SE/F4SE.h>
+#include <RE/Fallout.h>
 
-// devbench cross-plugin API — lets another SKSE plugin register MCP/REST tools and
-// emit events into the running devbench host. Usage: after SKSE sends your plugin
-// kPostLoad, request the interface via an SKSE messaging dispatch, then call through
+// devbench cross-plugin API — lets another F4SE plugin register MCP/REST tools and
+// emit events into the running devbench host. Usage: after F4SE sends your plugin
+// kPostLoad, request the interface via an F4SE messaging dispatch, then call through
 // the versioned abstract interface below.
 //
 // The call direction is reversed from a typical query API: you hand devbench a handler
@@ -47,12 +49,13 @@ namespace DevBenchAPI
 	};
 
 	struct IDevBenchInterface001;
-	// Call only after SKSE sends kPostLoad. Returns nullptr if devbench is absent.
+	// Call only after F4SE sends kPostLoad. Returns nullptr if devbench is absent.
 	IDevBenchInterface001* GetDevBenchInterface001();
 
 	struct IDevBenchInterface001
 	{
-		// devbench build number: VERSION_MAJOR*10000 + MINOR*100 + PATCH.
+		// Implemented host ABI compatibility level. This is intentionally independent
+		// of the package version; compare it with the compatibility gates below.
 		virtual unsigned int GetBuildNumber() = 0;
 
 		// Register a tool, exposed over both MCP (/mcp) and REST (/api/tool/<name>).
@@ -68,7 +71,7 @@ namespace DevBenchAPI
 		// action='invoke', name='<menuName>'. Thin alias for RegisterToolExtension("menu", …) — kept
 		// for the 1.4.0 ABI. Same handler contract as RegisterTool. Returns false if it replaced an
 		// existing handler. ABI: vtable slot exists only on hosts that ship it — call only when
-		// GetBuildNumber() >= 10400 (devbench 1.4.0).
+		// GetBuildNumber() >= kMenuHandlerCompatibility.
 		virtual bool RegisterMenuHandler(const char* a_menuName, const char* a_descriptorJson,
 			ToolFn a_handler, void* a_ctx) = 0;
 
@@ -81,8 +84,8 @@ namespace DevBenchAPI
 		// `inspect kind=extensions`). Opted-in base tools: `menu`, `inspect`. Returns false if it
 		// replaced an existing (baseTool, key) entry.
 		//
-		// ABI: appended after RegisterMenuHandler — call only when GetBuildNumber() >= 10500
-		// (devbench 1.5.0).
+		// ABI: appended after RegisterMenuHandler — call only when
+		// GetBuildNumber() >= kToolExtensionCompatibility.
 		virtual bool RegisterToolExtension(const char* a_baseTool, const char* a_key,
 			const char* a_descriptorJson, ToolFn a_handler, void* a_ctx) = 0;
 	};

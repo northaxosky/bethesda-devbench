@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { dirname, resolve } from "node:path";
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -6,127 +8,212 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { callTool, GameUnavailableError, listTools } from "./proxy.js";
-import { isSupportedGame, resolveTarget } from "./runtime.js";
+import { SessionConfigProvider } from "./config.js";
+import {
+  asJsonValue,
+  errorMessage,
+  isObject,
+  type JsonObject,
+} from "./json.js";
+import { WindowsSessionPlatform } from "./platform.js";
+import { RemoteProxy } from "./proxy.js";
+import { RemoteClient } from "./remote.js";
+import {
+  SessionController,
+  SESSION_TOOL,
+} from "./session.js";
+import { createRuntimeTarget } from "./runtime.js";
 import { printSetupSnippet } from "./setup.js";
-import toolsFallback from "./tools-fallback.json" with { type: "json" };
 
-interface DevbenchTool {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-  readOnly?: boolean;
+interface CliArguments {
+  command: "serve" | "setup" | "help";
+  game?: string;
+  install?: string;
+  runtimeFile?: string;
+  config?: string;
 }
 
-// devbench's REST shape uses a bare `readOnly`; MCP's is `annotations.readOnlyHint`.
-// Shared by both tools/list paths so they can't drift out of sync with each other.
-function toMcpTool(t: DevbenchTool) {
+export async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseArgs(argv);
+  if (args.command === "help") {
+    printHelp();
+    return;
+  }
+  const target = createRuntimeTarget({
+    ...(args.game ? { game: args.game } : {}),
+    ...(args.install ? { install: args.install } : {}),
+    ...(args.runtimeFile ? { runtimeFile: args.runtimeFile } : {}),
+  });
+  if (args.command === "setup") {
+    const invocation = bridgeInvocation();
+    printSetupSnippet(invocation.command, invocation.scriptArgs, {
+      game: "fo4",
+      ...(args.install ? { install: args.install } : {}),
+      ...(args.runtimeFile ? { runtimeFile: args.runtimeFile } : {}),
+      ...(args.config ? { config: args.config } : {}),
+    });
+    return;
+  }
+
+  const config = new SessionConfigProvider({
+    ...(args.config ? { configPath: args.config } : {}),
+    explicit: args.config !== undefined,
+  });
+  await config.validateExplicit();
+
+  const remote = new RemoteClient(target);
+  const server = new Server(
+    { name: "devbench-bridge", version: "0.1.0" },
+    { capabilities: { tools: { listChanged: true } } },
+  );
+  const proxy = new RemoteProxy(remote, {
+    onListChanged: async () => {
+      await server.sendToolListChanged();
+    },
+  });
+  const session = new SessionController({
+    config,
+    platformFactory: () => new WindowsSessionPlatform(),
+    remoteFactory: (sessionConfig) => {
+      if (!sessionConfig.runtimeFile) return remote;
+      return new RemoteClient(
+        createRuntimeTarget({
+          game: "fo4",
+          install: dirname(sessionConfig.gameExe),
+          runtimeFile: sessionConfig.runtimeFile,
+        }),
+      );
+    },
+  });
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [SESSION_TOOL, ...(await proxy.listRemoteTools())],
+  }));
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const argsObject = normalizeArguments(request.params.arguments);
+    const result =
+      request.params.name === SESSION_TOOL.name
+        ? await session.handle(argsObject)
+        : await proxy.callTool(request.params.name, argsObject);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(asJsonValue(result.value)),
+        },
+      ],
+      ...(result.isError ? { isError: true } : {}),
+    };
+  });
+
+  const transport = new StdioServerTransport();
+  let closing = false;
+  const close = async (): Promise<void> => {
+    if (closing) return;
+    closing = true;
+    proxy.close();
+    await session.shutdown();
+    await server.close().catch(() => undefined);
+  };
+  process.once("SIGINT", () => void close());
+  process.once("SIGTERM", () => void close());
+  process.stdin.once("end", () => void close());
+  await server.connect(transport);
+}
+
+function normalizeArguments(value: unknown): JsonObject {
+  if (value === undefined) return {};
+  if (!isObject(value)) throw new Error("tool arguments must be a JSON object");
+  return asJsonValue(value) as JsonObject;
+}
+
+function parseArgs(argv: string[]): CliArguments {
+  let command: CliArguments["command"] = "serve";
+  let game: string | undefined;
+  let install: string | undefined;
+  let runtimeFile: string | undefined;
+  let config: string | undefined;
+  for (let index = 0; index < argv.length; index++) {
+    const argument = argv[index];
+    if (argument === "setup") {
+      if (command !== "serve" || index !== 0) {
+        throw new Error("'setup' must be the first and only positional command");
+      }
+      command = "setup";
+      continue;
+    }
+    if (argument === "--help" || argument === "-h") {
+      command = "help";
+      continue;
+    }
+    switch (argument) {
+      case "--game":
+        game = requiredValue(argv, ++index, "--game");
+        break;
+      case "--install":
+        install = requiredValue(argv, ++index, "--install");
+        break;
+      case "--runtime-file":
+        runtimeFile = requiredValue(argv, ++index, "--runtime-file");
+        break;
+      case "--config":
+        config = requiredValue(argv, ++index, "--config");
+        break;
+      default:
+        throw new Error(`unknown argument '${String(argument)}'`);
+    }
+  }
   return {
-    name: t.name,
-    description: t.description,
-    inputSchema: t.inputSchema,
-    ...(t.readOnly ? { annotations: { readOnlyHint: true } } : {}),
+    command,
+    ...(game ? { game } : {}),
+    ...(install ? { install: resolve(install) } : {}),
+    ...(runtimeFile ? { runtimeFile: resolve(runtimeFile) } : {}),
+    ...(config ? { config: resolve(config) } : {}),
   };
 }
 
-// A compiled standalone executable's embedded entry script lives under this
-// virtual path; a plain `node dist/index.js` invocation does not.
+function requiredValue(
+  argv: string[],
+  index: number,
+  option: string,
+): string {
+  const value = argv[index];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${option} requires a value`);
+  }
+  return value;
+}
+
+function bridgeInvocation(): { command: string; scriptArgs: string[] } {
+  if (isCompiledExecutable()) {
+    return { command: process.execPath, scriptArgs: [] };
+  }
+  const script = process.argv[1];
+  if (!script) throw new Error("cannot determine the bridge entry script");
+  return { command: process.execPath, scriptArgs: [resolve(script)] };
+}
+
 function isCompiledExecutable(): boolean {
   return process.argv[1]?.includes("~BUN") ?? false;
 }
 
-function parseArgs(argv: string[]): {
-  game?: string;
-  install?: string;
-  setup: boolean;
-} {
-  let game: string | undefined;
-  let install: string | undefined;
-  let setup = false;
-  for (let i = 0; i < argv.length; i++) {
-    switch (argv[i]) {
-      case "--game":
-        game = argv[++i];
-        break;
-      case "--install":
-        install = argv[++i];
-        break;
-      case "setup":
-        setup = true;
-        break;
-    }
-  }
-  return { game, install, setup };
+function printHelp(): void {
+  console.log(`devbench-bridge [setup] --game fo4 [options]
+
+Restart-surviving stdio MCP bridge for Fallout 4 DevBench.
+
+Options:
+  --game fo4             Required game adapter; no other games are supported.
+  --install <folder>     Constrain discovery to <folder>\\Fallout4.exe and add its runtime.json.
+  --runtime-file <path>  Add an explicit runtime.json candidate.
+  --config <path>        Session controller machine config. Explicit invalid files fail startup.
+  --help, -h             Print this reference and exit.
+
+The default session config is %LOCALAPPDATA%\\devbench\\fo4\\session.json.
+It is never created or edited automatically. "setup" prints only an MCP JSON snippet.`);
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-
-  if (args.setup) {
-    if (!args.install && !isSupportedGame(args.game)) {
-      throw new Error(
-        "devbench-bridge setup requires --game se|vr or --install <path>.",
-      );
-    }
-    const scriptArgs = isCompiledExecutable() ? [] : [process.argv[1]];
-    printSetupSnippet(process.execPath, scriptArgs, args);
-    return;
-  }
-
-  const target = resolveTarget(args);
-
-  const server = new Server(
-    { name: "devbench-bridge", version: "0.1.0" },
-    { capabilities: { tools: {} } },
-  );
-
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    try {
-      const tools = await listTools(target);
-      return { tools: tools.map(toMcpTool) };
-    } catch (e) {
-      if (e instanceof GameUnavailableError) {
-        // A not-yet-running game reports the static fallback, not an empty list --
-        // a client typically fetches tools/list only once per session. A call still
-        // fails live with GameUnavailableError's own message.
-        return { tools: toolsFallback.tools.map(toMcpTool) };
-      }
-      throw e;
-    }
-  });
-
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    try {
-      const result = await callTool(
-        target,
-        request.params.name,
-        request.params.arguments ?? {},
-      );
-      return {
-        content: [{ type: "text", text: JSON.stringify(result ?? null) }],
-      };
-    } catch (e) {
-      const message =
-        e instanceof GameUnavailableError
-          ? `game not running (target: ${target.label})`
-          : (e as Error).message;
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ ok: false, reason: message }),
-          },
-        ],
-        isError: true,
-      };
-    }
-  });
-
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-}
-
-main().catch((e) => {
-  console.error(`devbench-bridge: ${(e as Error).message}`);
-  process.exit(1);
+main().catch((error: unknown) => {
+  console.error(`devbench-bridge: ${errorMessage(error)}`);
+  process.exitCode = 1;
 });

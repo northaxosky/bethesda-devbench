@@ -4,14 +4,16 @@
 .vs/
 .vscode/
 .xmake/
-.DS_Store
 
 # folders
-build/
+build*/
+dist/
 vs*/
 node_modules/
+bridge/standalone/
+bridge/session.local.json
 
 # files
 *.zip
 compile_commands.json
-xmake-deps.lua
+.clangd

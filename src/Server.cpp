@@ -1,10 +1,14 @@
 #include "Server.h"
 
+#include "Compatibility.h"
 #include "McpAdapter.h"
 #include "RestAdapter.h"
+#include "RuntimePaths.h"
+#include "RuntimeProtocol.h"
 #include "Version.h"
+#include "io/WindowsPaths.h"
 
-#include <RE/Skyrim.h>  // REL::Module::IsVR
+#include <REX/FModule.h>
 #include <httplib.h>
 #include <mcp_server.h>
 
@@ -12,19 +16,106 @@
 #include <ws2tcpip.h>
 
 #include <shellapi.h>
+#include <shlobj.h>
 
 #include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <system_error>
 
 namespace
 {
 	std::atomic<int> g_boundPort{ 0 };
 
-	// Process-wide registry pointer so dvb::RunTool can invoke tools from the in-game menu (a
-	// separate render-thread TU) without a Server reference. Atomic: written on the SKSE thread
+	std::string Utf8Path(const std::filesystem::path& a_path)
+	{
+		const auto bytes = a_path.u8string();
+		return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
+	}
+
+	std::filesystem::path ModulePath(HMODULE a_module)
+	{
+		std::vector<wchar_t> buffer(512);
+		while (buffer.size() <= 32768)
+		{
+			const auto length = ::GetModuleFileNameW(a_module, buffer.data(), static_cast<DWORD>(buffer.size()));
+			if (length == 0)
+				throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), "GetModuleFileNameW");
+			if (length < buffer.size())
+			{
+				// MO2 virtualizes GetModuleFileName; the opened file handle identifies its physical backing.
+				return dvb::io::PhysicalFilePath(std::wstring(buffer.data(), length));
+			}
+			buffer.resize(buffer.size() * 2);
+		}
+		throw std::runtime_error("module path exceeds the Windows path limit");
+	}
+
+	struct ProcessIdentity
+	{
+		std::uint32_t         pid;
+		std::string           instanceId;
+		std::filesystem::path executable;
+		std::filesystem::path plugin;
+		std::string           runtime;
+	};
+
+	const ProcessIdentity& Identity()
+	{
+		static const auto identity = [] {
+			FILETIME created{}, exited{}, kernel{}, user{};
+			if (!::GetProcessTimes(::GetCurrentProcess(), &created, &exited, &kernel, &user))
+				throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), "GetProcessTimes");
+			const auto pid = ::GetCurrentProcessId();
+			const auto ticks = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+			const auto module = REX::FModule::GetCurrentModule();
+			return ProcessIdentity{
+				pid,
+				dvb::MakeInstanceId(pid, ticks),
+				ModulePath(nullptr),
+				ModulePath(reinterpret_cast<HMODULE>(module.GetBaseAddress())),
+				REX::FModule::GetExecutingModule().GetFileVersion().string("."),
+			};
+		}();
+		return identity;
+	}
+
+	std::filesystem::path ExternalStateDirectory()
+	{
+		PWSTR      allocated = nullptr;
+		const auto result = ::SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &allocated);
+		if (FAILED(result))
+			throw std::runtime_error(std::format("LocalAppData lookup failed: 0x{:08X}", static_cast<std::uint32_t>(result)));
+		const std::unique_ptr<wchar_t, decltype(&::CoTaskMemFree)> path(allocated, &::CoTaskMemFree);
+		return std::filesystem::path(path.get()) / L"devbench" / L"fo4";
+	}
+
+	void WriteDiscoveryFile(const std::filesystem::path& a_path, const dvb::json& a_value)
+	{
+		try
+		{
+			std::filesystem::create_directories(a_path.parent_path());
+			const std::filesystem::path temporary = a_path.wstring() + L"." + std::to_wstring(::GetCurrentProcessId()) + L".tmp";
+			{
+				std::ofstream out;
+				out.exceptions(std::ios::failbit | std::ios::badbit);
+				out.open(temporary, std::ios::trunc);
+				out << a_value.dump(2) << '\n';
+				out.close();
+			}
+			if (!::MoveFileExW(temporary.c_str(), a_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+				throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), "replace discovery file");
+		}
+		catch (const std::system_error& a_error)
+		{
+			REX::ERROR("devbench: could not publish {}: {}", Utf8Path(a_path), a_error.what());
+		}
+	}
+
+	// Process-wide registry pointer so dvb::RunTool can invoke tools from an eventual in-game menu
+	// without a Server reference. Atomic: written on the F4SE thread
 	// (Start/Stop), read on the render thread (RunTool). Set/cleared by Server::Start/Stop.
 	std::atomic<dvb::ToolRegistry*> g_registry{ nullptr };
 
@@ -43,7 +134,8 @@ namespace
 		const bool   started = ::WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
 		bool         available = true;
 		const SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-		if (s != INVALID_SOCKET) {
+		if (s != INVALID_SOCKET)
+		{
 			sockaddr_in addr{};
 			addr.sin_family = AF_INET;
 			addr.sin_port = ::htons(static_cast<u_short>(a_port));
@@ -56,31 +148,20 @@ namespace
 		return available;
 	}
 
-	// %LOCALAPPDATA% survives a VFS mod manager's Data virtualization (MO2's overwrite folder
-	// swallows writes to Data/SKSE/Plugins/devbench); per-game subfolder since SE and VR run
-	// concurrently on separate ports.
-	std::optional<std::filesystem::path> ExternalStateDir()
-	{
-		wchar_t    buf[MAX_PATH]{};
-		const auto n = ::GetEnvironmentVariableW(L"LOCALAPPDATA", buf, static_cast<DWORD>(std::size(buf)));
-		if (n == 0 || n >= std::size(buf))
-			return std::nullopt;
-		return std::filesystem::path(buf) / "devbench" / (REL::Module::IsVR() ? "vr" : "se");
-	}
-
 	// Publish the actually-bound port so fixed-URL clients can discover a non-default
 	// choice (when auto-iteration moved off the configured port).
 	void WriteRuntimeInfo(int a_port)
 	{
-		const std::string payload = "{\"port\":" + std::to_string(a_port) + "}\n";
-		std::error_code   ec;
-		std::filesystem::create_directories("Data/SKSE/Plugins/devbench", ec);
-		if (std::ofstream f("Data/SKSE/Plugins/devbench/runtime.json", std::ios::trunc); f)
-			f << payload;
-		if (auto dir = ExternalStateDir()) {
-			std::filesystem::create_directories(*dir, ec);
-			if (std::ofstream f(*dir / "runtime.json", std::ios::trunc); f)
-				f << payload;
+		auto identity = dvb::InstanceIdentity();
+		identity["port"] = a_port;
+		WriteDiscoveryFile(LR"(Data\F4SE\Plugins\devbench\runtime.json)", identity);
+		try
+		{
+			WriteDiscoveryFile(ExternalStateDirectory() / L"runtime.json", identity);
+		}
+		catch (const std::exception& a_error)
+		{
+			REX::ERROR("devbench: external runtime discovery unavailable: {}", a_error.what());
 		}
 	}
 
@@ -88,15 +169,7 @@ namespace
 	// via its files rather than a live REST call (e.g. reading the install directory directly).
 	void WriteBridgeInfo()
 	{
-		const std::string payload = dvb::BridgeDiscoveryInfo().dump(2) + "\n";
-		if (std::ofstream f("Data/SKSE/Plugins/devbench/mcp-bridge.json", std::ios::trunc); f)
-			f << payload;
-		if (auto dir = ExternalStateDir()) {
-			std::error_code ec;
-			std::filesystem::create_directories(*dir, ec);
-			if (std::ofstream f(*dir / "mcp-bridge.json", std::ios::trunc); f)
-				f << payload;
-		}
+		WriteDiscoveryFile(LR"(Data\F4SE\Plugins\devbench\mcp-bridge.json)", dvb::BridgeDiscoveryInfo());
 	}
 }
 
@@ -121,8 +194,10 @@ namespace dvb
 		// runtime.json so fixed-URL clients can discover a non-default choice.
 		constexpr int kMaxTries = 16;
 		int           chosen = m_port;
-		for (int i = 0; i < kMaxTries; ++i) {
-			if (PortAvailable(m_host, m_port + i)) {
+		for (int i = 0; i < kMaxTries && m_port + i <= 65535; ++i)
+		{
+			if (PortAvailable(m_host, m_port + i))
+			{
 				chosen = m_port + i;
 				break;
 			}
@@ -150,27 +225,33 @@ namespace dvb
 		// REST facade on the same httplib server (constructed in mcp::server's ctor,
 		// so http() is valid here; cpp-mcp adds its own routes during start()).
 		m_restAdapter = std::make_unique<RestAdapter>(m_registry, m_events);
-		if (auto* http = m_mcp->http()) {
+		if (auto* http = m_mcp->http())
+		{
+			MountInstanceGuard(*http, Identity().instanceId);
 			// httplib's default 5s read timeout applies even to a bodyless POST (no
 			// Content-Length/chunked header) — it waits for a body that will never come
 			// before giving up with an empty 400. Shorten this so that mistake fails fast
 			// instead of stalling; GET /api/health is the real fix for liveness checks.
 			http->set_read_timeout(2, 0);
 			m_restAdapter->Mount(*http);
-		} else
-			logs::warn("devbench: cpp-mcp http() returned null; REST facade unavailable");
+		}
+		else
+			REX::WARN("devbench: cpp-mcp http() returned null; REST facade unavailable");
 
 		// Publish the chosen port before start() spawns the listener, so a health/inspect
 		// hit racing startup reads the right port rather than 0.
 		g_boundPort.store(chosen);
 		g_registry.store(&m_registry);        // reachable by dvb::RunTool (the in-game menu) while up
 		const bool ok = m_mcp->start(false);  // non-blocking; spawns the listener thread
-		if (ok) {
+		if (ok)
+		{
 			WriteRuntimeInfo(chosen);
 			WriteBridgeInfo();
 			if (chosen != m_port)
-				logs::info("devbench: configured port {} busy → bound {}", m_port, chosen);
-		} else {
+				REX::INFO("devbench: configured port {} busy → bound {}", m_port, chosen);
+		}
+		else
+		{
 			// Tear down the constructed-but-not-listening members: the `if (m_mcp)` guard at
 			// the top treats a non-null m_mcp as "already started", so leaving them set would
 			// make a later Start() return true without a live listener. Reset the port too, or
@@ -181,13 +262,14 @@ namespace dvb
 			m_mcpAdapter.reset();
 			m_mcp.reset();
 		}
-		logs::info("devbench: server on {}:{} — {}", m_host, chosen, ok ? "listening (mcp + rest)" : "FAILED to start");
+		REX::INFO("devbench: server on {}:{} — {}", m_host, chosen, ok ? "listening (mcp + rest)" : "FAILED to start");
 		return ok;
 	}
 
 	void Server::Stop()
 	{
-		if (m_mcp) {
+		if (m_mcp)
+		{
 			m_mcp->stop();
 			m_mcp.reset();
 		}
@@ -228,7 +310,8 @@ namespace dvb
 	{
 		using namespace std::chrono;
 		std::lock_guard lock(g_recCacheMtx);
-		if (const auto now = steady_clock::now(); !g_recCacheValid || now - g_recCacheAt > seconds(1)) {
+		if (const auto now = steady_clock::now(); !g_recCacheValid || now - g_recCacheAt > seconds(1))
+		{
 			g_recCache = RunTool("recordings", json{ { "action", "list" } });
 			g_recCacheAt = now;
 			g_recCacheValid = true;
@@ -265,47 +348,66 @@ namespace dvb
 
 	std::string ExecutableName()
 	{
-		char        path[MAX_PATH]{};
-		const DWORD len = ::GetModuleFileNameA(nullptr, path, MAX_PATH);
-		if (len == 0 || len == MAX_PATH)
-			return {};
-		return std::filesystem::path(path).filename().string();
+		return Utf8Path(Identity().executable.filename());
 	}
 
 	json InstanceIdentity()
 	{
-		// pid/exe/vr are constant for the process lifetime — compute once. /api/health is
-		// polled frequently, so avoid a GetModuleFileNameA + path + string alloc per call;
-		// only the bound port (an atomic) is read live.
-		static const int         pid = static_cast<int>(::GetCurrentProcessId());
-		static const std::string exe = ExecutableName();
-		static const bool        vr = REL::Module::IsVR();
-		return json{ { "pid", pid }, { "port", BoundPort() }, { "exe", exe }, { "vr", vr } };
+		const auto& identity = Identity();
+		return json{
+			{ "pid", identity.pid },
+			{ "port", BoundPort() },
+			{ "exe", ExecutableName() },
+			{ "instanceId", identity.instanceId },
+			{ "exePath", Utf8Path(identity.executable) },
+			{ "runtime", identity.runtime },
+			{ "dllPath", Utf8Path(identity.plugin) },
+			{ "compatibility", CompatibilityMetadata() },
+		};
 	}
 
 	json BridgeDiscoveryInfo()
 	{
-		const bool        vr = REL::Module::IsVR();
-		const std::string game = vr ? "vr" : "se";
-		std::error_code   ec;
-		const std::string exePath = std::filesystem::absolute("Data/SKSE/Plugins/devbench/devbench-bridge.exe", ec).string();
+		const std::string game = "fo4";
+		const auto        directory = Identity().plugin.parent_path() / L"devbench";
+		const auto        executable = directory / L"devbench-bridge.exe";
+		const auto        helper = directory / L"platform" / L"windows-session.ps1";
+		const auto        shim = directory / L"platform" / L"LaunchShim.cs";
+		const auto        launcher = directory / L"platform" / L"devbench-launch.exe";
+		const std::string exePath = Utf8Path(executable);
 		const std::string name = "devbench-" + game;
-		json              result{
+		std::error_code   ec;
+		const bool        available = std::filesystem::is_regular_file(executable, ec);
+		if (ec && ec != std::errc::no_such_file_or_directory)
+			REX::ERROR("devbench: could not inspect bridge executable: {}", ec.message());
+		ec.clear();
+		const bool controllerAvailable = available && std::filesystem::is_regular_file(helper, ec) &&
+		                                 std::filesystem::is_regular_file(shim, ec) && std::filesystem::is_regular_file(launcher, ec);
+		if (ec && ec != std::errc::no_such_file_or_directory)
+			REX::ERROR("devbench: could not inspect session helper: {}", ec.message());
+		return json{
+			{ "available", available },
+			{ "controllerAvailable", controllerAvailable },
 			{ "exePath", exePath },
 			{ "args", json::array({ "--game", game }) },
 			{ "mcpJsonSnippet",
 				json{ { "mcpServers", json{ { name, json{ { "command", exePath }, { "args", json::array({ "--game", game }) } } } } } } },
 			{ "installCommand", std::format("\"{}\" setup --game {}", exePath, game) },
+			{ "compatibility", CompatibilityMetadata() },
 			{ "note",
 				"Add mcpJsonSnippet to your MCP client's config (e.g. .mcp.json), or run installCommand "
-				"to print the same thing — devbench never edits your client config itself. Under a VFS mod "
-				"manager (MO2, …), exePath is only reachable by processes launched through that manager's "
-				"virtual filesystem -- an MCP client spawning the bridge directly needs a real, on-disk copy "
-				"instead (extract devbench-bridge.exe from the release archive). runtime.json and this file "
-				"are also mirrored to externalStateDir, which isn't virtualized, for exactly that reason." },
+				"to print the same thing. Use a physical on-disk bridge path outside the MO2 virtual view. "
+				"Session control also requires platform/windows-session.ps1 and a machine-local session config." },
 		};
-		if (auto dir = ExternalStateDir())
-			result["externalStateDir"] = dir->string();
-		return result;
+	}
+
+	std::filesystem::path RuntimeGameDirectory()
+	{
+		return Identity().executable.parent_path();
+	}
+
+	std::filesystem::path RuntimePluginDirectory()
+	{
+		return Identity().plugin.parent_path();
 	}
 }

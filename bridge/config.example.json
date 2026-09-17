@@ -1,0 +1,24 @@
+{
+  "mo2Exe": "C:\\Path\\To\\Mod Organizer 2\\ModOrganizer.exe",
+  "profilesDir": "C:\\Path\\To\\Mod Organizer 2\\profiles",
+  "profile": "DevBench Test",
+  "executable": "DevBench Launch",
+  "gameExe": "C:\\Path\\To\\Fallout 4\\Fallout4.exe",
+  "loaderExe": "C:\\Path\\To\\Fallout 4\\f4se_loader.exe",
+  "devbenchDll": "C:\\Path\\To\\MO2\\mods\\DevBench - Dev\\F4SE\\Plugins\\devbench.dll",
+  "runtimeFile": "C:\\Users\\Example\\AppData\\Local\\devbench\\fo4\\runtime.json",
+  "expectedRuntime": "1.11.240.0",
+  "expectedDllSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "resultsDir": "C:\\Path\\To\\DevBench Results",
+  "logs": [
+    {
+      "path": "C:\\Path\\To\\Mod Organizer 2\\overwrite\\F4SE\\devbench.log",
+      "maxBytes": 1048576
+    },
+    {
+      "path": "C:\\Path\\To\\Crash Logs",
+      "pattern": "crash-*.log",
+      "maxBytes": 2097152
+    }
+  ]
+}

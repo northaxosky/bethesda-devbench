@@ -13,7 +13,7 @@ namespace DevBenchAPI
 		if (g_devBenchInterface)
 			return g_devBenchInterface;
 
-		const auto messaging = SKSE::GetMessagingInterface();
+		const auto messaging = F4SE::GetMessagingInterface();
 		if (!messaging)
 			return nullptr;
 

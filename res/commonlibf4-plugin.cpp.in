@@ -1,0 +1,15 @@
+#include <F4SE/F4SE.h>
+
+F4SE_PLUGIN_VERSION = []() noexcept {
+	F4SE::PluginVersionData v{};
+	v.PluginVersion({ ${COMMONLIB_PLUGIN_VERSION_MAJOR}, ${COMMONLIB_PLUGIN_VERSION_MINOR}, ${COMMONLIB_PLUGIN_VERSION_PATCH}, 0 });
+	v.PluginName("${COMMONLIB_PLUGIN_NAME}");
+	v.AuthorName("${COMMONLIB_PLUGIN_AUTHOR}");
+	v.UsesAddressLibrary(true);
+	v.UsesAddressLibraryNG(true);
+	v.UsesSigScanning(false);
+	v.HasNoStructUse(false);
+	// Leaving layout-dependence unset keeps versionIndependent false, so F4SE enforces this list.
+	v.CompatibleVersions({ F4SE::RUNTIME_1_11_240 });
+	return v;
+}();

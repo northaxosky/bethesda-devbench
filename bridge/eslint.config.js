@@ -14,6 +14,12 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ["dist/**", "test/**", "scripts/**", "eslint.config.js"],
+    ignores: [
+      "dist/**",
+      "standalone/**",
+      "test/**",
+      "scripts/**",
+      "eslint.config.js",
+    ],
   },
 );

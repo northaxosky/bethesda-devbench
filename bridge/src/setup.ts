@@ -1,29 +1,30 @@
-// Prints a ready-to-paste MCP client config snippet. Never writes to any config file
-// itself — per the architecture decision, the bridge proposes, a human approves/pastes.
+export interface SetupArguments {
+  game: "fo4";
+  install?: string;
+  runtimeFile?: string;
+  config?: string;
+}
 
 export function printSetupSnippet(
-  exePath: string,
-  scriptArgs: (string | undefined)[],
-  args: { game?: string; install?: string },
+  command: string,
+  scriptArgs: string[],
+  args: SetupArguments,
 ): void {
-  const name = `devbench-${args.game ?? "custom"}`;
   const cliArgs = [
-    ...scriptArgs.filter((a): a is string => a !== undefined),
-    ...(args.install
-      ? ["--install", args.install]
-      : ["--game", args.game ?? "se"]),
+    ...scriptArgs,
+    "--game",
+    args.game,
+    ...(args.install ? ["--install", args.install] : []),
+    ...(args.runtimeFile ? ["--runtime-file", args.runtimeFile] : []),
+    ...(args.config ? ["--config", args.config] : []),
   ];
   const snippet = {
     mcpServers: {
-      [name]: {
-        command: exePath,
+      "devbench-fo4": {
+        command,
         args: cliArgs,
       },
     },
   };
-  console.log(`Add this to your MCP client's config (e.g. .mcp.json):\n`);
   console.log(JSON.stringify(snippet, null, 2));
-  console.log(
-    `\nThen restart/reload your MCP client to pick up the "${name}" server.`,
-  );
 }

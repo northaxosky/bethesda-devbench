@@ -68,16 +68,19 @@ namespace
 		put32(0);
 		put32(0);
 
-		for (int y = a_h - 1; y >= 0; --y) {
+		for (int y = a_h - 1; y >= 0; --y)
+		{
 			int written = 0;
-			for (int x = 0; x < a_w; ++x) {
+			for (int x = 0; x < a_w; ++x)
+			{
 				const uint8_t v = a_px(x, y);
 				buf.push_back(v);
 				buf.push_back(v);
 				buf.push_back(v);
 				written += 3;
 			}
-			while (written < rowSize) {
+			while (written < rowSize)
+			{
 				buf.push_back(0);
 				++written;
 			}

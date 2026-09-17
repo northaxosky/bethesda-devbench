@@ -1,459 +1,90 @@
-# devbench
+# Bethesda DevBench
 
-A standalone SKSE plugin that hosts a **general test bench for Skyrim mod development**:
-an in-process server that exposes mod functionality to **AI agents (MCP)** and to **plain
-HTTP clients (REST)** through one endpoint, on `127.0.0.1`.
+A Fallout 4 port of [alandtse/devbench](https://github.com/alandtse/devbench)
+for mod development and testing through local MCP and REST tools.
+Targets **Fallout 4 1.11.240 with F4SE**; other runtimes and game adapters
+are not supported by this port.
 
-It is transport-agnostic by design. A `ToolRegistry` is the single source of truth; the MCP
-and REST adapters _reflect_ it, so a tool registered once is reachable over both protocols
-automatically. Other SKSE mods register their own tools through a small C ABI, turning
-devbench into a shared bench rather than a per-mod server.
+The [companion bridge](bridge/README.md) keeps MCP connected across game
+restarts and manages controller-owned MO2 sessions. `fallout4-utils` remains
+a separate, user-facing plugin.
 
-## What devbench does for developers
+## Tools
 
-devbench lets an **AI agent, a test script, or CI drive and measure a running Skyrim** — no
-alt-tabbing, no hand-clicking. One local endpoint, MCP for agents and REST for scripts, and a
-shared registry every mod can extend.
+The implementation targets upstream **v1.18.2**:
+`input`, `menu`, `console`, `scenario`, `inspect`, `game`, `camera`, `papyrus`,
+`capture`, `record`, `recordings`, `wait`, `sleep`, `mcp_bridge_setup`, and `ping`.
+Use MCP tool discovery or `GET /api/tools` for arguments and capabilities.
 
-- **Automated testing.** Run console commands and read their output, inspect live
-  engine/plugin state, answer menus, load saves — then chain them with the **`scenario`** tool:
-  a timed step list that waits on _real_ events (`waitFor postLoadGame`) instead of guessed
-  sleeps, can `repeat`, and returns a per-step transcript. Steps dispatch **any registered
-  tool** (including ones your mod adds), so a scenario can flip your feature mid-run and assert
-  the result.
-- **Record / replay.** **`record`** captures a manual play-through — trajectory, point-of-view,
-  cell transitions (doors/`coc`), and the console commands you typed — into a portable file you
-  replay deterministically: by hand, on a hotkey, or unattended on load (`autoRun`). The entry
-  point (the save you loaded) is captured too, so a replay re-establishes the scene first.
-- **Performance / A-B testing.** A recorded play-through replays the **same path and conditions
-  every run**, so an A/B shader/feature comparison measures the _change_, not your hands.
-  devbench publishes **semantic `EventBus` events** — `record.started`/`record.stopped`,
-  `scene.cellLoaded`, `menu`, `lifecycle`, `health.stalled`/`health.resumed` — so a profiler client can align a capture to those
-  boundaries; pair it with a Tracy-instrumented build (via the `tracy` MCP) to attribute
-  frametime/GPU cost to a specific moment, toggle a feature through its tool, replay the same
-  recipe, and diff the numbers.
-- **Why wire it into your mod.** Register your mod's operations as devbench tools over a tiny
-  **MIT** C-ABI (`RegisterTool` / `EmitEvent`) and they instantly appear on **both** MCP and
-  REST — so AI assistants (Claude, Cursor), test scripts, and CI can toggle your features, read
-  your state, trigger your captures, and benchmark you, all through one shared bench. You write
-  the handler; discovery, JSON-Schema docs, and both transports come for free. Because every mod
-  registers into the **same** server, one agent session can orchestrate across your whole load
-  order. [Open Shaders](https://github.com/alandtse/open-shaders) does this today.
-
-## Design
-
-```
-            register (in-proc or cross-plugin C-ABI)
- mods ───────────────────────────────────────────────▶  ToolRegistry  ◀── EventBus
-                                                              ▲                ▲
-                                              ┌───────────────┴──────┐         │
-                                         McpAdapter             RestAdapter ───┘
-                                         (/mcp, JSON-RPC)       (/api/*, plain HTTP)
-                                              └──────────┬───────────┘
-                                                  one httplib server, one port
-```
-
-- **`ToolRegistry`** — name → `{descriptor, handler}`. Handlers are JSON-in / JSON-out and
-  run on the listener thread; handlers that touch game/render state marshal to the main
-  thread via `MainThread::RunAndWait`, which **returns the value synchronously** (the
-  agentic-renderdoc model: an agent gets data back, not just an ack).
-- **`EventBus`** — fan-out for notifications (e.g. shader recompiles): MCP notifications for
-  agents, `GET /api/events?since=N` polling or SSE for HTTP clients.
-- **Adapters** — generic; neither contains a tool name. The descriptor's JSON Schema doubles
-  as the MCP `inputSchema` and the REST `GET /api/tools` documentation.
-
-The tool surface is intentionally **thin and powerful** (an `eval`/`console` primitive plus a
-small set of conveniences) rather than a tool per operation.
-
-## Safety
-
-Bound to `127.0.0.1` only. The bench has no auth and can execute arbitrary commands in the
-game process — that is acceptable for a _local dev bench_ but it must never be bound to a
-network-reachable address, and `eval`-class tools are gated behind an explicit enable.
-
-## MCP client setup
-
-Two ways to connect an MCP client, for two different needs:
-
-- **Direct**, for a quick single-session debug: point your client at `http://127.0.0.1:8920/mcp`
-  (or `8921`, or whatever `runtime.json` reports). Zero extra setup, but the connection dies the
-  instant the game process exits — including every rebuild-and-relaunch during normal dev
-  iteration — and needs a manual reconnect.
-- **[devbench-bridge](bridge/README.md)**, for anything that needs to survive the game
-  restarting: a small companion process your MCP client spawns over stdio, which proxies to
-  devbench's REST API instead of connecting to `/mcp` directly. Ships inside the install
-  (`Data/SKSE/Plugins/devbench/devbench-bridge.exe`) — call the `mcp_bridge_setup` tool (or read
-  `GET /api/tools`'s `mcp_bridge` field, or `mcp-bridge.json` next to `runtime.json`) for the
-  exact config snippet to paste into your client.
+Capture uses optional providers or an explicitly selected native screenshot
+fallback, which is inconclusive for visual assertions. No RenderDoc provider,
+VR input, or hotkey/autorun frontend is bundled.
 
 ## Build
 
-xmake, C++23, CommonLibSSE-NG (submodule). cpp-mcp is vendored as the `lib/cpp-mcp`
-submodule and built in-tree as a static-lib target (`xmake/cpp-mcp.lua`, mirroring
-Community Shaders' `cmake/cpp-mcp.cmake`): only its four server TUs are compiled, and a
-build-tree header mirror applies two edits — pointing `mcp_message.h` at our
-`nlohmann/json.hpp` (single ABI) and adding a public `http()` getter to `mcp_server.h` so
-the REST facade can share the MCP port.
+Requires Windows, MSVC with C++26 support, xmake, and Node.js 22+.
+From this repository in PowerShell:
 
-```
+```powershell
 git submodule update --init --recursive
-xmake
-# auto-deploy: set SkyrimPluginTargets to ';'-separated game Data dirs before building
+Remove-Item Env:\FO4_DEV_MODS, Env:\XSE_FO4_MODS_PATH, Env:\XSE_FO4_GAME_PATH -ErrorAction SilentlyContinue
+Push-Location bridge
+npm ci
+Pop-Location
+xmake config --mode=releasedbg -y
+xmake build
+xmake build devbench-tests
+xmake run devbench-tests
 ```
 
-## Configuration
+Clear those three variables in **every fresh build shell**: CommonLib can
+deploy during a build, even without `xmake install`. Ship `releasedbg`, not
+`release`, and keep `build\windows\x64\releasedbg\devbench.dll` with its matching
+PDB. The build also packages the standalone companion and its `platform` files.
 
-Headless config (no in-game menu yet) at `Data/SKSE/Plugins/devbench/config.json` — read
-once at `kPostLoad` (before any consumer's `kDataLoaded`), then the server starts.
-Missing → auto-created with defaults. Invalid → defaults (logged). All keys are optional.
+Run `npm run validate` in `bridge` for companion checks without launching the
+game. PowerShell 7 and an MO2 launcher entry are required for session control;
+see [bridge setup](bridge/README.md). `devbench-interop` is test-only.
 
-```jsonc
+## Configuration and connection
+
+Startup reads `Data\F4SE\Plugins\devbench\config.json` under the game directory.
+Missing settings receive defaults; invalid configuration fails startup.
+The mutation opt-ins default to off and require a game restart:
+
+```json
 {
-  "enabled": true, // start the MCP/REST server at all (default true)
-  "port": 8920, // localhost port for /mcp and /api. Default is per-runtime — SE/AE 8920, VR 8921 — so a fixed MCP client URL is stable; set explicitly to override. Iterates only if the chosen port is busy (rare; logged), bound port in runtime.json.
-  "logLevel": "info", // trace|debug|info|warn|error (default "info")
-
-  // In-game hotkeys (DXScanCode integers; 0 = disabled). Ignored while the console is open.
-  "recordHotkey": 0, // toggle record start/stop
-  "recordHotkeyShift": false, // require Shift held with recordHotkey
-  "replayHotkey": 0, // replay a recording
-  "replayHotkeyShift": false, // require Shift held with replayHotkey
-  "replayPath": "", // recording to replay; empty = most recent
-  "replayRestoreScene": true, // hotkey replay re-establishes the recorded scene
-  "recordIntervalMs": 10, // record: pose sample period in ms (10..1800000); per-call intervalMs overrides
-
-  // Autorun: replay a recording once on the first load of the session (unattended benchmark).
-  "autoRunPath": "", // recording to replay on first postLoadGame; empty = off
-  "autoRunRestoreScene": true, // autorun loads the recording's entry save first
-
-  // Settle delay (ms) after a restore-load before the replayed trajectory runs.
-  // Hardware-dependent; not baked into the portable recording file.
-  "loadSettleMs": 3000,
-
-  // Scene coupling: how strictly a replay reproduces the recorded entry, by how long
-  // before record-start the save/coc was brokered (stored per recipe as entryPoint.ageMs).
-  //   age <= couplingAnchorMs : "anchored" — restore the entry + re-apply recorded time/weather
-  //   age <= couplingCellMs   : "cell"     — restore the entry
-  //   else                    : "worldspace" — skip the restore; only assert the worldspace
-  // A recipe may override the tier/thresholds in its meta.coupling block.
-  "couplingAnchorMs": 10000,
-  "couplingCellMs": 60000,
-
-  // A raw coc/cow can stream between scenes without the loading-screen teardown some mods
-  // need to free resources (→ CTD). When true, a coc/cow restore first bounces through
-  // cleanTransitionCell to force a clean loading screen. Save-loads already tear down.
-  "cleanTransition": true,
-  "cleanTransitionCell": "QASmoke",
-
-  // If the engine frame counter hasn't advanced for this long (ms), publish a
-  // "health.stalled" EventBus event (and "health.resumed" once it recovers) — catches a
-  // frozen main thread, which a menu/lifecycle event can never report on its own (those are
-  // published BY the main thread). 0 disables the watchdog.
-  "stallWatchdogMs": 5000,
+  "enabled": true,
+  "port": 8930,
+  "logLevel": "info",
+  "allowConsoleCommands": false,
+  "allowGameActions": false,
+  "allowControlActions": false,
+  "allowPapyrusCalls": false
 }
 ```
 
-`enabled: false` skips starting the server entirely. Bind address is fixed to `127.0.0.1`.
-The port is **deterministic per runtime** — **SE/AE `8920`, VR `8921`** — so a fixed MCP client URL
-never moves; set `port` explicitly to override. If the chosen port is already taken (e.g. a second
-instance of the same runtime), devbench iterates to the next free port (logged) and writes the bound
-port to `Data/SKSE/Plugins/devbench/runtime.json` (`{ "port": N }`) for discovery. Under a VFS mod
-manager (MO2, …) that path is virtual and unreachable from outside the manager's own hook, so the
-same file is also mirrored to `%LOCALAPPDATA%\devbench\<se|vr>\runtime.json`, which isn't
-virtualized — devbench-bridge checks both and uses whichever is freshest.
+Use the companion for restart-surviving MCP, or connect directly to
+`http://127.0.0.1:8930/mcp`. REST exposes `/api/health`, `/api/tools`,
+`/api/events`, and `POST /api/tool/{name}`. The selected port and instance
+identity are mirrored at `%LOCALAPPDATA%\devbench\fo4\runtime.json`.
 
-## Connect an MCP client
+## Safety
 
-devbench serves **streamable-HTTP MCP at `POST http://127.0.0.1:<port>/mcp`** — most clients connect
-natively, no extra process:
+- Keep the listener local. Mutation opt-ins are not authentication or a sandbox.
+- Use disposable saves: native wait/sleep preserves game rules and autosaves;
+  named-save overwrite protection does not protect rolling saves.
+- Check completion and gameplay readiness, not just HTTP health or queue
+  acknowledgements. Timeouts do not cancel accepted mutations; never blindly retry.
+- Use `game` for save/load; raw console save/load is blocked. Replay uses the
+  same permission gates and does not substitute a missing named fixture.
+- Never close MO2 before Fallout and its launch shim exit and RootBuilder
+  cleanup completes.
 
-```sh
-# Claude Code — register both games; the one that's running has live tools, the other shows disconnected
-claude mcp add --transport http devbench-se http://127.0.0.1:8920/mcp   # SE/AE
-claude mcp add --transport http devbench-vr http://127.0.0.1:8921/mcp   # VR
-```
+## Source
 
-For a **stdio-only** client, bridge with the off-the-shelf `mcp-remote` (no devbench-specific binary):
-`{ "command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:8920/mcp", "--allow-http"] }`. Plain
-HTTP scripts/CI use REST (`/api/tool/<name>`) and need no client config. devbench advertises
-`tools.listChanged` and emits `notifications/tools/list_changed`, so tools that register after connect
-(a mod loading, or the game finishing load) surface without reconnecting.
-
-`GET /api/health` is the one endpoint answered off the main thread (no `RunAndWait`) — a fast,
-always-returning liveness + identity probe: `{ ok, lastLifecycle, frame, lastTaskFrame,
-pendingTasks, pid, port, exe, vr }`. Because it never waits on the main thread, it keeps
-answering while a normal tool call would `504` on a legitimately busy main thread (e.g. a long
-synchronous shader compile after a deploy). Read it as: `frame` advancing = busy but alive;
-`frame` frozen = hung **or** paused/console-open/loading (a frozen frame alone is not proof of a
-hang); `pendingTasks > 0` while `lastTaskFrame` stops advancing = the main-thread task queue is
-starved. `pid`/`port`/`exe`/`vr` identify which instance answered, so a client pinned to one port
-spots a multi-instance misattach in one call (`frame < 0` = counter unresolved / not in-game).
-MCP clients (which speak `tools/call`, not REST GET) get the same off-thread signal via
-`inspect kind=health` — no new tool, just another `inspect` kind.
-
-## Built-in tools
-
-All tools are reachable over both MCP (`tools/call`) and REST (`POST /api/tool/<name>`).
-
-| Tool       | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ping`     | Self-test. Returns `{ "ok": true }`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `console`  | Run a Skyrim console command. `action='exec'` queues `command` on the main thread. With `capture=true`, fences it between marker commands; `action='read'` then slices ConsoleLog's buffer between the markers and returns `{ markersFound, lines:[…] }`. Useful for `getav`, `getpos`, `help`, etc.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `inspect`  | Read live game/plugin state. Runs on the main thread and returns synchronously. `kind='state'` → `{ plugin, version, vr, playerLoaded, frame, pid, port, exe }`. `'health'` → off-thread liveness+identity `{ frame, lastTaskFrame, pendingTasks, pid, port, exe, vr }` — the only kind answered without the main thread, so it keeps replying while a busy main thread would 504 (see `GET /api/health` above). `'vm'` → Papyrus VM health `{ loadedTypes, attachedScripts, arrays, runningStacks, frozenStacks, overstressed }`. `'scene'` → player context `{ cell, worldspace, location, position, gameHour, daysPassed, weather }`. `'mods'` → active load order `{ count, lightCount, total, plugins:[{index, name}], lightPlugins:[…] }` (full and light plugins are separate index spaces; the env fingerprint a repro/CI run pins against). `'player'` → player snapshot `{ name, level, sex, gold, race, actorValues:{health,magicka,stamina,carryWeight each {current,max}}, equipped:{right,left,ammo} }`. `'inventory'` → items held by the player (or a container `formId`) `{ owner, count, items:[{formId, name, formType, count, value, weight, equipped}] }` (filters: `formType`, `limit`). `'quests'` → journal (running/completed) `{ count, quests:[{formId, name, stage, type, active, completed, objectives:[{index, text, state}]}] }` (`limit`). `'effects'` → active magic effects on the player (or an actor `formId`) `{ target, count, activeEffects:[{spell, effect, magnitude, duration, elapsed}] }`. `'refs'` → identify reference(s) sharing one shape `{ formId, formType, name, editorId, base, position }`: pass `formId` for one form, `selected=true` for the console/crosshair ref (set via `prid`), or neither to enumerate loaded refs in the grid (filters: `formType`, `radius`, `limit`). A consumer mod can add a custom `kind` via the C-ABI `RegisterToolExtension` (e.g. load-timing data); `kind='extensions'` lists the registered kinds + descriptors and `kind=<registered>` dispatches to it. |
-| `input`    | Versioned synthetic input. Call `action='capabilities'` first. Contract v2 retains the owned, bounded `keyboard` actions and adds `vrTrackedSet`: one prevalidated asynchronous sequence in which every frame atomically defines the HMD plus both controllers' OpenVR pose and full packet/button/touch/axis state. Read-only `action='observe'` returns that same complete canonical frame from the physical OpenVR runtime, allowing a caller to preserve current poses while compiling a bounded action. VR replay hooks the compositor/system interfaces Skyrim reads and passes the real runtime through unchanged while inactive. Individual VR devices or buttons cannot be injected separately, preventing pose and control state from drifting onto different clocks. A VR sequence start returns an opaque `controlToken` required for external stop/release; cross-owner cleanup and lifecycle survival are internal-only. Failed controller restoration remains explicit and retryable. Keyboard expiry retries until release succeeds or its generation becomes obsolete. Ad-hoc input stops on load/new-game; recording replay may survive only the lifecycle events it is reproducing and is released by replay cleanup.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `game`     | Save/load and list saves. `action='list'` enumerates the saves directory. `'loadLast'` loads the most recent save (a settled real-game state — avoids `coc`'s heavy new-game init). `'load'`/`'save'` take a `'name'`. All mutating actions are fire-and-forget; watch `lifecycle` events for completion.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `menu`     | Inspect, open, answer, or dismiss menus. `'list'` → `{ openMenus, messageBoxOpen }`. `'describe'` → active `MessageBoxMenu` body + buttons. `'accept'` → answer a `MessageBoxMenu` by button index (runs its callback; this is how you clear a Yes/No modal). `'open'` → show a menu by name via the UI queue (`kShow`); opens hub menus from a plain name (`TweenMenu`, `Journal Menu`, `MagicMenu`, …); context menus needing a target ref (`ContainerMenu`/`BarterMenu`/`BookMenu`) won't open this way. `'close'` → hide a menu by name via the UI queue (`kHide`). `'invoke'` → dispatch to a consumer-registered menu handler by `name` (a mod exposes its menu's interaction via the C-ABI `RegisterMenuHandler` instead of adding its own tool, keeping the surface to this one tool); `'list'` returns those names under `registered`, and `'describe'` with a `name` returns that handler's descriptor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `papyrus`  | Inspect the live Papyrus surface and invoke functions, returning the value. `'list'` → loaded script class names `{ total, returned, truncated, scripts }` (optional `filter`, `limit`). `'describe'` `{ script }` → that class's `{ globalFunctions, memberFunctions, properties }`, each function with params + return type. `'call'` `{ script, function, args?, self?, timeoutMs? }` runs a function via the VM and returns `{ called, returned, returnedType }` — unlike console `cgf`, the return value comes back (e.g. `Utility.GetCurrentGameTime` → a Float). Pass `self` for a **member** call: `{ "form": "0x14 \| editorId" }` targets any form, or `"selected"` uses the console/crosshair ref (set via `prid`); without `self`, only globals/native are callable. Args and returns support bool/number/string, `{ "form": … }` (a form return resolves to `{ formId, formType, editorId, name }`), and arrays of scalars. Omitted trailing **optional** params are padded to the type's neutral default (`None`/`0`/`0.0`/`false`/`""`) — the VM doesn't fill them, and a short arg list otherwise makes reference ops (`MoveTo`, `Disable`, `Kill`) silently no-op; pass explicit values for any optional whose real default isn't neutral (e.g. `StringUtil.Substring`'s `-1`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `scenario` | Run a timed sequence of steps server-side and return a per-step transcript. Steps: `tool` (dispatch any registered tool), `wait` (fixed ms), `waitFor` (block on a Skyrim event), `waitUntil` (poll live state). Optional: `repeat` (≤1000), `continueOnError`. See [Scripted tests](#scripted-tests) below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `camera`   | Read or set the player camera. `'get'` → `{ pov, freeCam, camX/Y/Z, camPitch/camYaw }`. `'setPov'` → switch first/third/vanity. `'freecam'` `{ on }` → toggle the free camera. `'drive'` `{ x,y,z,pitch,yaw }` → set the free-cam transform (position exact; used for fixed/reproducible benchmark viewpoints).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `wait`     | Advance time by waiting `{ hours }`, synchronously and without touching the Wait menu's UI — starts the wait, then drives its completion (autosave, script events) to done before returning; no polling needed. Returns `{ completed:true, hours }`, or `{ completed:false, reason }` on the same gate the menu itself enforces (combat, trespassing, midair, hostiles nearby, etc.).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `sleep`    | Advance time by sleeping `{ hours }` (the rest variant — drives the well-rested / lover's-comfort bonus). Same mechanics as `wait`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `record`   | Capture a manual play-through as a versioned activity trace and replayable scenario. `'start'` samples player pose + POV and OpenVR HMD/controller tracking every `intervalMs`, including exact controller packet/button/touch/axis state, and captures the normalized Skyrim input chain, menu/lifecycle changes, cell transitions, console commands, and a scene manifest on one monotonic clock. `allowNoPlayer=true` permits main-menu/new-game capture before a player exists; optional `correlationId` is retained by start, status, and the recording metadata. Capture stops at the replay contract's 60,000-frame or 30-minute limits and reports `limitReached`/`limitReason`; call `'stop'` to persist the bounded recording. `'stop'` writes compact `devbench-recording-3` JSON. `'replay'` can restore the scene, starts one atomic `vrTrackedSet` sequence, and interleaves keyboard transitions on the recording clock. Legacy recordings are upgraded from wand-indexed controller events; ambiguity and unsupported observational events are reported rather than hidden. Use `replayInputs=false` for pose-only replay. Runtime and scene-coupling gates remain enforced unless explicitly overridden.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-
-Other mods add their own tools via the C ABI (see [Use devbench from your mod](#use-devbench-from-your-mod)).
-
-## Record, replay, and autorun
-
-The `record` tool captures a manual play-through as a replayable scenario file:
-
-1. Load a save or `coc` to the scene you want to record. To capture a main-menu → new-game
-   flow instead, start there and pass `allowNoPlayer=true`.
-2. Call `record` with `action='start'` (or press the `recordHotkey`). devbench samples the
-   player pose + point-of-view every `intervalMs` ms (default from `recordIntervalMs`, range 10..1800000),
-   including HMD and left/right wand world transforms after the player loads. On VR it also
-   samples raw OpenVR HMD/left/right tracking-space poses, velocities, validity, connection state,
-   device index/class/role, and both controllers' complete packet/button/touch/five-axis state. The
-   raw OpenVR stream is available at the main menu before Skyrim creates the player. A background
-   sampling thread captures that stream, a one-time scene manifest, and the entry point (the save
-   loaded or cell `coc`'d to — captured even for saves/loads you do through the menu).
-3. Play through the scene — movement, point-of-view changes, every normalized keyboard/mouse/
-   gamepad/VR-controller event, menu and lifecycle transitions, cell transitions
-   (doors/`coc`/`cow`), and console commands are captured on the same clock. Then call `record`
-   with `action='stop'` (or press the hotkey again). The trajectory is written to
-   `Data/SKSE/Plugins/devbench/recordings/recording_<stamp>.json` and the path is returned.
-   A fresh install ships a ready-to-replay default recording in that same dir —
-   `GuardianStonesToWhiterun.json`, a Guardian Stones → Whiterun run that clears the survival
-   menu and enables `tgm` before moving — so you can benchmark without recording one first.
-
-   `meta.activityCapture` publishes the activity contract and replay matrix. The top-level
-   `activityEvents` stream is capture-complete for the normalized Skyrim event types exposed by
-   CommonLib. Activity contract v1.1 records exact controller state per tracking sample; input
-   contract v2 replays keyboard transitions and one atomic OpenVR tracked set containing the HMD
-   plus both controllers.
-   Legacy captures are upgraded using wand indices and inserted transition frames; reports disclose
-   any right-handed role fallback or unsupported event instead of pretending it was reproduced.
-   Keyboard holds longer than 58 seconds are rejected before replay because the input contract's
-   60-second safety lease must retain a release margin; use `replayInputs=false` for those captures.
-
-4. Replay with `record action='replay' path='<file>'`. The atomic HMD/controller stream and recorded
-   keyboard transitions use the recording clock by default; pass `replayInputs=false` for pose-only
-   behavior. With `restoreScene=true` (default for
-   hotkey replay), devbench first re-establishes the entry point (loads the save / `coc`s the
-   cell) and waits for the player before running the trajectory. How tightly it reproduces the
-   entry depends on the **coupling tier** (anchored / cell / worldspace), chosen from how long
-   before recording the entry was set up — see `couplingAnchorMs`/`couplingCellMs`. Before the
-   trajectory runs, devbench **asserts** you're in the recorded worldspace/cell and aborts on a
-   mismatch (e.g. `coc` ambiguity landing you in the wrong worldspace), so a replay can't quietly
-   benchmark the wrong scene. A `coc`/`cow` restore bounces through a neutral cell first
-   (`cleanTransition`) to force a loading-screen teardown that some mods need to avoid a CTD.
-
-5. **Format + runtime.** New recordings are `devbench-recording-3`: v2's compact pose steps plus
-   one compact activity event per line. A trajectory sample remains
-   `{ "pose": [x, y, z, yawDeg, pitchDeg], "wait": ms }` (it expands to
-   the same `player.setpos`/`setangle` commands), so a recording is ~7× smaller than the old
-   all-console form and stays hand-editable and git-diffable one sample at a time. Each recording
-   carries `meta.runtime.compat` — `["se","ae"]` for a flat teleport path, `["vr"]` for a VR
-   recording — and replay **gates** on it: a flat path gives non-comparable frames on VR (the HMD
-   drives pitch and culling) and vice-versa, so replay aborts on a runtime the recording wasn't
-   made for unless you pass `force`. See `default_recordings/` (with its `index.json` + `README`)
-   for the curated, `validated` library and the `<StartZone>To<EndZone>` naming convention.
-
-A recipe can pin or tune its own coupling in the recording file's `meta.coupling` block,
-overriding the global config thresholds:
-
-```jsonc
-"meta": { "coupling": { "tier": "anchored" } }                 // force a tier, or
-"meta": { "coupling": { "anchorMs": 5000, "cellMs": 30000 } }  // tune the age thresholds
-```
-
-**In-game hotkeys** (configured in `config.json`, opt-in, both default to disabled):
-
-- `recordHotkey` — DXScanCode integer; toggles record start/stop. Ignored while the console is
-  open. Optionally require Shift with `recordHotkeyShift: true`.
-- `replayHotkey` — replays the recording at `replayPath` (or the most recent recording if
-  empty). Optionally require Shift with `replayHotkeyShift: true`. `replayRestoreScene`
-  controls whether the scene is re-established first.
-
-**Autorun** (`autoRunPath`) replays a recording once on the first `postLoadGame` of the session
-with no client connected and no keypress — a fully unattended benchmark. Set
-`autoRunRestoreScene: true` (default) to have devbench load the recorded entry save first.
-
-HUD notifications confirm hotkey actions (record started, record stopped, replay started).
-
-## Scripted tests
-
-On Skyrim VR, use `camera {"action":"freecam","on":true}` before `camera drive`,
-then `camera {"action":"freecam","on":false}` to restore the previous camera.
-VR requests complete on the main thread (`queued:false`); allow a rendered frame
-after driving before capturing. This path uses the native camera update pipeline
-and does not change freeze time; rendered stereo still needs in-game qualification.
-Unpatched engine console `tfc`/`ToggleFlyCam` activation still crashes in VR.
-Use DevBench for the whole enable/drive/disable sequence; externally activated
-free cameras are rejected. See [VR free-camera behavior and validation](docs/vr-free-camera.md).
-
-The **`scenario`** tool runs a timed step list server-side and returns a per-step transcript —
-one call replaces hand-chained requests with frame-accurate timing. Each step is a `tool`
-dispatch (any registered tool), a fixed `wait`, an event-driven **`waitFor`**, or a state-poll
-`waitUntil`. **Prefer `waitFor`** — it keys off the _actual_ Skyrim event (a load is done when
-`lifecycle:postLoadGame` fires) rather than a guessed sleep. This is a validated battery — load,
-wait for the load event, settle, rotate in place, then enable and restore the camera:
-
-```jsonc
-POST /api/tool/scenario          // MCP: tools/call name=scenario — identical body
-{
-  "steps": [
-    { "tool": "game",    "args": { "action": "load", "name": "Save215" } },
-    { "waitFor": "postLoadGame", "timeoutMs": 60000 },   // EVENT, not a guessed sleep
-    { "waitUntil": "playerLoaded" },                     // belt-and-suspenders state poll
-    { "tool": "console", "args": { "command": "player.setangle z 0" } },
-    { "wait": 3000 },                                    // pacing with no event → fixed wait
-    { "tool": "console", "args": { "command": "player.setangle z 90" } },
-    { "wait": 3000 },
-    { "tool": "console", "args": { "command": "player.setangle z 180" } },
-    { "wait": 3000 },
-    { "tool": "console", "args": { "command": "player.setangle z 270" } },
-    { "tool": "camera", "args": { "action": "freecam", "on": true } },
-    { "tool": "camera", "args": { "action": "freecam", "on": false } }
-  ]
-}
-// -> { "ok": true, "stepsRun": 12, "elapsedMs": 14213,
-//      "results": [ { "index": 0, "kind": "tool", "ok": true, ... },
-//                   { "index": 1, "kind": "waitFor", "satisfied": true, "elapsedMs": 4870 }, ... ] }
-```
-
-`waitFor` shorthands: lifecycle (`postLoadGame`/`saveGame`/`newGame`/`preLoadGame`/
-`dataLoaded`/`deleteGame`), or `menuClosed`/`menuOpened` with a `name` (e.g. wait for
-`LoadingMenu` to close, or dismiss a modal then wait for it gone); the general form is
-`{ "topic": "...", "match": { ... } }`. Add `repeat` (≤1000) to loop the list and
-`continueOnError` to keep going past a failed step.
-
-`waitUntil` conditions: `playerLoaded`, `noModal`, `noMenu`.
-
-**Steps dispatch any registered tool — including tools other mods add over the C ABI.** A
-consumer mod such as [Open Shaders](https://github.com/alandtse/open-shaders) (a fork of
-[Community Shaders](https://www.nexusmods.com/skyrimspecialedition/mods/180419)) can register
-a `feature` tool so `{ "tool": "feature", "args": { "action": "toggle", "shortName": "..." } }`
-becomes a valid scenario step — letting a test flip a feature mid-run.
-
-## Use devbench from your mod
-
-Register your own MCP/REST tools (and emit events) into the running host over a small C ABI.
-The integration glue (`include/DevBenchAPI.h` + `DevBenchAPI.cpp`) is **MIT** — pick whichever
-fits your project:
-
-- **Copy the overlay port** (recommended) — drop `cmake/ports/devbench-api/` into your repo's
-  vcpkg overlay and you're done; the portfile fetches the MIT API source (no source copied into
-  your tree). This works out of the box — it's exactly what consumers do today:
-
-  ```cmake
-  find_package(devbench-api CONFIG REQUIRED)
-  target_link_libraries(YourPlugin PRIVATE DevBench::API)
-  ```
-
-- **Copy the two API files directly** — `DevBenchAPI.h` + `DevBenchAPI.cpp` into your plugin
-  and build them; no vcpkg involved. Simplest bootstrap, fully MIT.
-
-After SKSE sends your plugin `kPostLoad`:
-
-```cpp
-#include <DevBenchAPI.h>
-if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {            // null if devbench absent
-    dvb->RegisterTool("yourmod.do", R"({"description":"…","inputSchema":{…}})",
-                      &YourHandler, yourCtx);                        // handler: C fn ptr + ctx
-    dvb->EmitEvent("yourmod.ready", R"({"ok":true})");
-}
-```
-
-Your tool then appears on both `/mcp` (`tools/list`/`tools/call`) and `/api/tool/<name>`.
-Handlers run on the server thread — marshal to the main game thread (SKSE `TaskInterface`) for
-anything touching game state. See `include/DevBenchAPI.h` and `cmake/ports/devbench-api/README.md`.
-
-To add a sub-capability **under an existing base tool** — instead of a whole new tool — register an
-extension keyed by a string (keeps the agent-facing surface small). Opted-in base tools: `menu` and
-`inspect`. E.g. expose load-timing data as a custom `inspect` kind:
-
-```cpp
-if (dvb->GetBuildNumber() >= 10500)                                 // RegisterToolExtension: 1.5.0+
-    dvb->RegisterToolExtension("inspect", "yourmod.loadtimes",
-                               R"({"description":"per-plugin load timings"})", &YourHandler, ctx);
-```
-
-Driven as `inspect kind="yourmod.loadtimes"` (same handler contract — it receives the full base-tool
-args). **Discoverable on the first call:** registering a kind rebuilds the `inspect` tool so your key
-appears in its `kind` enum + description in `tools/list` (a `notifications/tools/list_changed` is
-emitted, so a client that connected before your mod loaded refreshes) — no `kind=extensions` round-trip
-needed. Pass a `"description"` in the descriptor; it's shown inline. For menus,
-`RegisterToolExtension("menu", name, …)` (or the older `RegisterMenuHandler`, 1.4.0+) registers a
-`menu invoke name=<name>` handler — also surfaced in the `menu` tool's description and `menu list`'s
-`registered`; `menu open` on a registered name returns a 400 pointing you at `invoke`. Opening/closing/
-listing engine menus already works generically — only custom interaction/data needs a handler.
-
-**Only extend a base tool whose name already means what you're adding — or a cold agent won't find it.**
-An LLM client triaging a long tool list reads a tool's existing summary as its whole story before
-reading the full schema. A/B-tested with two cold subagents (same task, same target mod, no other
-context): one build exposed a settings-command/query dispatcher as its own top-level tool
-(`yourmod.actions`); the other bolted the identical dispatcher onto `menu` via new `op` values
-(`op:"invokeCommand"`, alongside the existing `open`/`close`/`toggle`). The agent given the separate
-tool found it immediately and used it correctly. The agent given the merged `menu` tool never tried
-it — `menu`'s summary reads "open/close/toggle a window," so the agent judged it irrelevant to a
-settings task and moved on, missing the extra `op` values entirely even though they were fully
-present in the schema — then fell back to hand-deriving raw state to accomplish the task, the exact
-fragile path the dispatcher existed to avoid. `RegisterToolExtension` keeps the top-level list short,
-but that's not free if the extension's job doesn't semantically match the base tool it hides under —
-register a new top-level tool instead when it doesn't.
-
-### Design your tools the agentic-renderdoc way
-
-devbench follows the **[agentic-renderdoc](https://github.com/EdenLabs/agentic-renderdoc#why-this-design)**
-model: a _thin but powerful_ surface an agent can drive, where a call **returns the value**, not
-just an ack. Match that when you register, so an agent gets a coherent bench rather than a pile of
-one-off verbs:
-
-- **Return data, not "ok."** A read should answer the question (`{ "loaded": true, "fps": 58 }`),
-  not `{ "queued": true }`. Run on the main thread via SKSE's `TaskInterface` and return the
-  result synchronously (devbench's own `inspect` does this).
-- **Few powerful tools over many narrow ones.** Prefer one `shadercache` tool with an `action`
-  enum to four verbs. A general primitive (an `eval`-style entry into your subsystem) beats a
-  tool per operation.
-- **Self-describe.** Put a real `inputSchema` and a clear `description` on every tool — that
-  _is_ the MCP schema and the REST docs; it's how an agent discovers what you offer cold.
-- **Make failure legible.** Validate inputs and return an actionable error (what was wrong + how
-  to list valid values), rather than silently succeeding.
-
-### Events
-
-`EmitEvent(topic, payload)` publishes to the **same bus** every listener already reads (MCP
-notifications + REST `/api/events?since=N`) — your events are first-class, delivered exactly like
-devbench's built-in `menu`/`lifecycle` events. devbench can't tell which mod emitted an event (the
-interface is shared), so **namespace your topics** the way you namespace tool names —
-`yourmod.somethingHappened` — to make the origin clear and avoid collisions with other mods.
-
-## Performance data
-
-devbench publishes semantic **`EventBus` events** — `record.started`/`record.stopped`,
-`scene.cellLoaded`, `menu`, `lifecycle`, and `health.stalled`/`health.resumed` — so a client can align a capture to those
-boundaries (and the `scenario` tool returns per-step timings synchronously) — but devbench does
-not collect or serve profiling data itself.
-Frametime and GPU metrics are left to dedicated clients: pair devbench with a Tracy-instrumented
-mod (using the `tracy` MCP) or any other profiler to annotate captures with what the bench was
-doing.
-
-## License
-
-[GPL-3.0-or-later](COPYING) WITH [Modding Exception AND GPL-3.0 Linking Exception (with Corresponding Source)](EXCEPTIONS).
-Specifically, the Modded Code is Skyrim (and its variants) and Modding Libraries include [SKSE](https://skse.silverlock.org/), Commonlib (and variants), and Windows.
-
-The cross-plugin **API glue is separately MIT** and **carries no copyleft effect**:
-`include/DevBenchAPI.h`, `DevBenchAPI.cpp`, and `DevBenchAPI.LICENSE.txt`. **Any** SKSE plugin —
-_including closed-source / non-GPL mods_ — may vendor those files (via the `devbench-api` vcpkg
-port) to talk to devbench with **zero GPL obligation**.
+`shared` retains the upstream v1.17.0 (`afd0f3d`) shared sources unchanged.
+Engine-independent tools live in `src\tools`, the native adapter in
+`src\game\fallout4`, and the external controller in `bridge`.
+The plugin is [GPL-3.0](COPYING) with upstream's [modding and linking exceptions](EXCEPTIONS).
+The [cross-plugin API glue](include/DevBenchAPI.LICENSE.txt) has a separate MIT license.

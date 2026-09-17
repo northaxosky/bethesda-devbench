@@ -1,0 +1,721 @@
+{
+  "compatibility": {
+    "hostApi": {
+      "implementedCompatibilityFloor": 10500
+    },
+    "packageVersion": "0.1.0",
+    "upstreamBaseline": {
+      "commit": "726fa8691db22a9e2f42c15406cf4bc504815b36",
+      "version": "1.18.2"
+    }
+  },
+  "format": "devbench.core-tools-1",
+  "game": "fo4",
+  "tools": [
+    {
+      "description": "devbench C-ABI self-test; echoes its args.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "ping",
+      "readOnly": true
+    },
+    {
+      "description": "Queue one console command on the game thread. action='exec' is disabled unless allowConsoleCommands=true. capture=true returns a unique captureId; poll action='read' with that id for an ordered native ConsoleLog slice. queued=true is only an acceptance acknowledgement, not proof that the command or its asynchronous effects succeeded. Capture is bounded and best-effort: native output may be delayed/truncated and unrelated console lines may interleave. Raw save/load/savegame/loadgame commands are rejected because that console path can deadlock.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "exec",
+            "enum": [
+              "exec",
+              "read"
+            ],
+            "type": "string"
+          },
+          "capture": {
+            "default": false,
+            "description": "exec: surround the command with unique native console fences",
+            "type": "boolean"
+          },
+          "captureId": {
+            "description": "read: id returned by exec with capture=true",
+            "type": "string"
+          },
+          "command": {
+            "description": "exec: exactly one non-blank console command",
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "console",
+      "readOnly": false
+    },
+    {
+      "description": "Read game/devbench state. health is answered off the game thread and reports identity plus queued main-thread task health. state reports lifecycle, menu, and real player readiness. vm reports lock-protected Papyrus collection sizes and state. player reports identity, equipment, and Fallout 4 current/base/permanent actor values. scene reports cell/worldspace/location/current scene, position, time, and weather. mods reports the final full/light load order after gameDataReady. inventory reads a player or container inventory; quests reads Fallout 4 instanced journal objectives; effects reads an actor's active-effect list; refs resolves, selects, or enumerates loaded forms; registrants reports the existing HostApi consumer/registration ledger. extensions lists consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.",
+      "inputSchema": {
+        "properties": {
+          "formId": {
+            "description": "inventory owner, effects actor, or refs form: 0x-prefixed/bare hexadecimal FormID or EditorID",
+            "type": "string"
+          },
+          "formType": {
+            "description": "inventory/refs: case-insensitive record type code or friendly alias",
+            "type": "string"
+          },
+          "kind": {
+            "default": "state",
+            "enum": [
+              "health",
+              "state",
+              "vm",
+              "player",
+              "scene",
+              "mods",
+              "inventory",
+              "quests",
+              "effects",
+              "refs",
+              "registrants",
+              "extensions",
+              "saves",
+              "saveload",
+              "screenshots"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 500,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "radius": {
+            "description": "refs enumeration radius from the player; 0 scans the loaded grid",
+            "minimum": 0,
+            "type": "number"
+          },
+          "selected": {
+            "description": "refs only: use the console's current picked reference handle",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "name": "inspect",
+      "readOnly": true
+    },
+    {
+      "description": "Inspect save/load status, list Fallout 4 .fos saves with optional bounded header metadata, queue a native save/load, or directly advance the Fallout 4 calendar. Mutations require allowGameActions=true, serialize one in-flight operation, never overwrite an existing save, and return an actionCursor captured before native dispatch for lifecycle correlation. An explicit dir is read-only selection and must resolve to the native save directory for mutations. Loads never answer content-mismatch dialogs automatically; advanceTime is not wait or sleep.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "status",
+            "enum": [
+              "status",
+              "list",
+              "save",
+              "load",
+              "loadLast",
+              "advanceTime"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "default": false,
+            "description": "list: parse bounded metadata from each returned .fos header",
+            "type": "boolean"
+          },
+          "dir": {
+            "description": "list: read an explicit save directory; mutations may only name the native effective directory",
+            "maxLength": 32767,
+            "type": "string"
+          },
+          "filter": {
+            "description": "list: case-insensitive basename substring",
+            "maxLength": 200,
+            "type": "string"
+          },
+          "hours": {
+            "description": "advanceTime: finite non-zero signed game hours",
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "type": "number"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 500,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "save/load: extensionless Fallout 4 save basename",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "game",
+      "readOnly": false
+    },
+    {
+      "description": "Run a validated sequence server-side and return a per-step transcript. action='run' is synchronous by default; async:true returns a runId for status/cancel. Steps use the upstream tool, wait, waitFor, waitUntil, and assert vocabulary. Tool steps dispatch through the common registry, so the target handler's permissions and validation remain authoritative. A valid result.eventCursor may refine the pre-dispatch event cursor used by the following waitFor; queued game operations are additionally correlated by operationId. pose validates all five finite values before lowering through the console tool. waitFor accepts lifecycle/menu shorthands, {topic,match}, and the narrowly gated replay missing-content modal response. waitUntil supports playerLoaded/noModal/noMenu/noBlockingMenu or a VALUE predicate; assert supports scene/noBlockingMenu or a VALUE predicate over a registered readOnly tool: {tool,args,path,eq|ne|lt|le|gt|ge|exists}. Only one run executes at a time. Limits: repeat<=1000, expandedSteps<=10000, wait/timeout<=300000ms, run<=600000ms, transcript<=4194304 bytes, retained histories=128. Cancellation is cooperative and cannot undo or preempt a tool callback already running.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "run",
+            "enum": [
+              "run",
+              "status",
+              "cancel"
+            ],
+            "type": "string"
+          },
+          "async": {
+            "default": false,
+            "type": "boolean"
+          },
+          "continueOnError": {
+            "default": false,
+            "type": "boolean"
+          },
+          "repeat": {
+            "default": 1,
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "runId": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "steps": {
+            "maxItems": 10000,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "name": "scenario",
+      "readOnly": false
+    },
+    {
+      "description": "Read installation and MCP client configuration details for the packaged external bridge. This tool never installs the bridge or modifies client configuration.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "mcp_bridge_setup",
+      "readOnly": true
+    },
+    {
+      "description": "Discover loaded Fallout 4 Papyrus script classes, describe actual VM function/property/struct type metadata, or dispatch one permission-gated global or bound-object call. Arguments are validated against exact VM metadata before dispatch. Supported values are Bool, Int, Float, String, form-backed objects, arrays, and typed Fallout 4 structs/struct arrays with recursively validated fields and explicit typed nulls. Var, unknown fields/types, raw VM pointers, and untyped JSON inference are rejected. A call timeout is not cancellation: an accepted latent call can complete later and is never retried.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "list",
+            "enum": [
+              "list",
+              "describe",
+              "call"
+            ],
+            "type": "string"
+          },
+          "args": {
+            "default": [],
+            "description": "call: values validated against the resolved function signature; structs use {type,fields}, objects use {form}, nulls use {type,value:null}",
+            "maxItems": 32,
+            "type": "array"
+          },
+          "filter": {
+            "description": "list: case-insensitive class-name substring",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "function": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "default": 200,
+            "maximum": 500,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "script": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "self": {
+            "anyOf": [
+              {
+                "enum": [
+                  "selected"
+                ],
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "form": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "form"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "call: omit for a global/static call; use 'selected' or a form selector for a bound-object call"
+          },
+          "timeoutMs": {
+            "default": 3000,
+            "maximum": 30000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "papyrus",
+      "readOnly": false
+    },
+    {
+      "description": "FO4-only synthetic keyboard input through Fallout 4's BSInputEventQueue. action='capabilities' (default) reports readiness, limits, injection path, and the complete DirectInput scan-code catalog. Mutations require allowControlActions=true. 'down' creates a bounded owner lease; same-owner down is idempotent and another owner receives 409. 'up' releases only that owner's lease. 'tap' and 'sequence' use wall-clock timing; sequence is fully prevalidated and balanced before dispatch. 'releaseAll' is owner-scoped externally. Queued native work is generation-gated so cancelled, expired, or lifecycle-invalidated downs cannot execute later. Releases remain leased and retry until native acknowledgement. Physical keyboard state is observed but never modified. This contract does not expose VR tracked input or claim render-frame pacing.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "capabilities",
+            "enum": [
+              "capabilities",
+              "status",
+              "down",
+              "up",
+              "tap",
+              "sequence",
+              "releaseAll"
+            ],
+            "type": "string"
+          },
+          "all": {
+            "type": "boolean"
+          },
+          "device": {
+            "enum": [
+              "keyboard"
+            ],
+            "type": "string"
+          },
+          "durationMs": {
+            "maximum": 5000,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "events": {
+            "items": {
+              "type": "object"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array"
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "key": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "maximum": 255,
+                "minimum": 1,
+                "type": "integer"
+              }
+            ]
+          },
+          "maxHoldMs": {
+            "maximum": 60000,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "owner": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "input",
+      "readOnly": false
+    },
+    {
+      "description": "Capture bounded Fallout 4 pose, console, lifecycle, menu, and cell activity into devbench-recording-3, mark checkpoints by id, and replay through the shared scenario worker/history. Replays preserve named-save identity, resolve rolling saves exactly once, use typed CELL/WRLD transitions where available, suppress feedback recording, and never claim VR tracking. validate is provided by the recordings tool and marks metadata only.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "status",
+            "enum": [
+              "start",
+              "stop",
+              "status",
+              "checkpoint",
+              "replay"
+            ],
+            "type": "string"
+          },
+          "allowNoPlayer": {
+            "default": false,
+            "type": "boolean"
+          },
+          "async": {
+            "default": true,
+            "type": "boolean"
+          },
+          "captureCheckpoints": {
+            "default": true,
+            "type": "boolean"
+          },
+          "continueOnError": {
+            "default": false,
+            "type": "boolean"
+          },
+          "correlationId": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "coupling": {
+            "enum": [
+              "anchored",
+              "cell",
+              "worldspace"
+            ],
+            "type": "string"
+          },
+          "excludeUi": {
+            "default": true,
+            "type": "boolean"
+          },
+          "file": {
+            "type": "string"
+          },
+          "force": {
+            "default": false,
+            "type": "boolean"
+          },
+          "goldens": {
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "intervalMs": {
+            "maximum": 600000,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "path": {
+            "description": "legacy alias for a bare filename confined to the recordings root",
+            "type": "string"
+          },
+          "repeat": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "restoreScene": {
+            "default": false,
+            "type": "boolean"
+          },
+          "runId": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "settleMs": {
+            "maximum": 60000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subrect": {
+            "type": "object"
+          },
+          "variant": {
+            "default": "default",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "record",
+      "readOnly": false
+    },
+    {
+      "description": "Manage the confined recording library using the same parser as record/replay. list reports malformed entries individually; describe returns metadata; validate atomically changes meta.validated without running a test; delete removes only the explicit requested file.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "list",
+            "enum": [
+              "list",
+              "describe",
+              "validate",
+              "delete"
+            ],
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "force": {
+            "default": false,
+            "description": "explicitly accept a degraded foreign-game/VR metadata read or validation",
+            "type": "boolean"
+          },
+          "value": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "name": "recordings",
+      "readOnly": false
+    },
+    {
+      "description": "Inspect and control Fallout 4 menus. list returns tracked open menus and consumer-registered menu handlers. describe without a name snapshots the active MessageBoxMenu, including an exact text/button fingerprint; describe with a name returns a registered handler descriptor. accept requires both an explicit button index and matchBody, then rechecks the complete observed fingerprint immediately before dispatch so a changed dialog is never answered. cancelIndex is null because Fallout 4 1.11.240 does not expose a proven cancel-button field. open is restricted to context-free engine menus (currently PauseMenu); close hides a named non-message menu; invoke calls an existing ToolExtensions menu handler. Mutating actions require allowControlActions=true. Registered invoke targets: none currently registered.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "default": "list",
+            "enum": [
+              "list",
+              "describe",
+              "accept",
+              "open",
+              "close",
+              "invoke"
+            ],
+            "type": "string"
+          },
+          "index": {
+            "description": "accept: explicit 0-based button index",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "matchBody": {
+            "description": "accept: case-insensitive body substring identifying the expected dialog",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "description": "describe/invoke: registered menu (none currently registered); open/close: engine menu",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "menu",
+      "readOnly": false
+    },
+    {
+      "description": "Read or control the Fallout 4 player camera. get returns the live POV, state id, free-camera ownership, and available transform fields. setPov uses Fallout 4's normal first/third-person transitions and its native auto-vanity entry path. freecam enters/exits the native free-camera stack without freezing time, but only exits a mode entered by DevBench. drive requires DevBench-owned free camera and sets an absolute world-unit position plus pitch/yaw radians; angles are normalized before dispatch. Mutations require allowControlActions=true. A mutation that starts but misses its acknowledgement deadline has an uncertain outcome and must not be retried.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "get",
+            "enum": [
+              "get",
+              "setPov",
+              "freecam",
+              "drive"
+            ],
+            "type": "string"
+          },
+          "on": {
+            "default": true,
+            "description": "freecam target state",
+            "type": "boolean"
+          },
+          "pitch": {
+            "description": "drive pitch in radians",
+            "type": "number"
+          },
+          "pov": {
+            "description": "setPov target",
+            "enum": [
+              "first",
+              "third",
+              "vanity"
+            ],
+            "type": "string"
+          },
+          "x": {
+            "description": "drive world X in Fallout units",
+            "type": "number"
+          },
+          "y": {
+            "description": "drive world Y in Fallout units",
+            "type": "number"
+          },
+          "yaw": {
+            "description": "drive yaw/heading in radians",
+            "type": "number"
+          },
+          "z": {
+            "description": "drive world Z in Fallout units",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "name": "camera",
+      "readOnly": false
+    },
+    {
+      "description": "Capture a completed decodable screenshot with per-request correlation. kind='auto' uses the sole registered capture extension, refuses ambiguity, and only uses the vanilla MenuControls queue when allowNative=true. kind='native' is always degraded and inconclusive for visual regression because UI exclusion and subrect guarantees are unavailable; its completed screenshot is moved into the configured capture directory before publication so RootBuilder cleanup cannot invalidate the result. kind='providers' lists keys; kind='extensions' includes descriptors; any other kind names a provider. Providers receive absolute forward-slash outputPath and requestId, must not overwrite it, and may publish capture.ready with the same requestId. Success requires an exclusive-open, stable, decodable file, not an event alone. Optional golden/threshold/regions use the existing SSIM implementation; callers must reject an inconclusive result even when passed=true.",
+      "inputSchema": {
+        "properties": {
+          "allowNative": {
+            "default": false,
+            "type": "boolean"
+          },
+          "checkpointId": {
+            "description": "required for capture actions; portable single-segment artifact stem",
+            "type": "string"
+          },
+          "cleanup": {
+            "default": false,
+            "description": "accepted for upstream compatibility; native relocation always leaves one canonical artifact",
+            "type": "boolean"
+          },
+          "excludeUi": {
+            "default": true,
+            "type": "boolean"
+          },
+          "golden": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "auto",
+            "description": "auto | native | providers | extensions | registered provider key",
+            "enum": [
+              "auto",
+              "native",
+              "providers",
+              "extensions"
+            ],
+            "type": "string"
+          },
+          "outDir": {
+            "description": "override the configured canonical output root for provider or native captures",
+            "type": "string"
+          },
+          "pollMs": {
+            "maximum": 1000,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "recording": {
+            "default": "adhoc",
+            "type": "string"
+          },
+          "regions": {
+            "maxItems": 64,
+            "type": "array"
+          },
+          "subrect": {
+            "description": "provider request {x,y,w,h} in normalized 0..1 UV",
+            "type": "object"
+          },
+          "threshold": {
+            "default": 0.98,
+            "maximum": 1.0,
+            "minimum": -1.0,
+            "type": "number"
+          },
+          "timeoutMs": {
+            "maximum": 60000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "variant": {
+            "default": "default",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "capture",
+      "readOnly": false
+    },
+    {
+      "description": "Wait through Fallout 4's real SleepWaitMenu gate, loaded SWF hour clamp, normal update pumping, finish path, and native autosave policy. The host accepts up to 100000 hours, but the loaded menu decides the actual maximum. Use action='status' after an uncertain listener timeout; never retry an active operation.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "enum": [
+              "start",
+              "status"
+            ],
+            "type": "string"
+          },
+          "hours": {
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "wait",
+      "readOnly": false
+    },
+    {
+      "description": "Sleep through Fallout 4's real SleepWaitMenu path. The host accepts up to 100000 hours, but the loaded menu decides the actual maximum. A placed bed reference target is required so furniture ownership, Survival/mod rules, interruptions, side effects, and native autosave policy are preserved. Use action='status' after an uncertain listener timeout.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "enum": [
+              "start",
+              "status"
+            ],
+            "type": "string"
+          },
+          "hours": {
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "target": {
+            "description": "placed bed reference form ID (hex/decimal) or editor ID",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "sleep",
+      "readOnly": false
+    }
+  ]
+}

@@ -1,105 +1,189 @@
-// runtime.json is re-read on every call (never cached), since devbench's port can
-// change across a game restart.
+import { readFile } from "node:fs/promises";
+import { join, resolve, win32 } from "node:path";
 
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import {
+  errorMessage,
+  requireInteger,
+  requireObject,
+  requireString,
+} from "./json.js";
 
-export interface Target {
-  /** Human-readable label for error messages ("SE", "VR", or the --install path). */
-  label: string;
-  /** Directory containing runtime.json — the Data-relative path or its %LOCALAPPDATA% mirror. */
-  runtimeDir: string;
-}
-
-interface RuntimeJson {
+export interface RuntimeIdentity {
+  runtimeFile: string;
   port: number;
-  [key: string]: unknown;
+  pid: number;
+  instanceId: string;
+  exePath: string;
+  runtime: string;
+  dllPath: string;
 }
 
-// Best-effort default Steam library locations; --install covers anything else.
-const DEFAULT_SE_INSTALLS = [
-  "C:/Program Files (x86)/Steam/steamapps/common/Skyrim Special Edition",
-  "C:/SteamLibrary/steamapps/common/Skyrim Special Edition",
-  "D:/SteamLibrary/steamapps/common/Skyrim Special Edition",
-  "E:/SteamLibrary/steamapps/common/Skyrim Special Edition",
-];
-const DEFAULT_VR_INSTALLS = [
-  "C:/Program Files (x86)/Steam/steamapps/common/SkyrimVR",
-  "C:/SteamLibrary/steamapps/common/SkyrimVR",
-  "D:/SteamLibrary/steamapps/common/SkyrimVR",
-  "E:/SteamLibrary/steamapps/common/SkyrimVR",
-];
-
-function runtimeDirFor(installPath: string): string {
-  return join(installPath, "Data", "SKSE", "Plugins", "devbench");
+export interface RuntimeTarget {
+  game: "fo4";
+  label: string;
+  runtimeFiles: string[];
+  install?: string;
 }
 
-// Must match Server.cpp's ExternalStateDir() exactly: %LOCALAPPDATA%\devbench\<se|vr>,
-// reachable even under a VFS mod manager (MO2) where Data/SKSE/Plugins/devbench is virtual.
-function localAppDataDevbenchDir(game: "se" | "vr"): string | undefined {
-  const localAppData = process.env.LOCALAPPDATA;
-  return localAppData ? join(localAppData, "devbench", game) : undefined;
-}
-
-// runtime.json survives after the game exits, so picking the first readable
-// candidate can pin a stale install over a live one; pick the most recently
-// written file instead (devbench rewrites it fresh on every boot).
-function freshestExisting(candidates: string[]): string | undefined {
-  let best: { dir: string; mtimeMs: number } | undefined;
-  for (const dir of candidates) {
-    try {
-      const mtimeMs = statSync(join(dir, "runtime.json")).mtimeMs;
-      if (!best || mtimeMs > best.mtimeMs) best = { dir, mtimeMs };
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-    }
-  }
-  return best?.dir;
-}
-
-/** Whether `game` is a supported --game value. */
-export function isSupportedGame(game: string | undefined): game is "se" | "vr" {
-  return game === "se" || game === "vr";
-}
-
-/** Resolve a Target from parsed CLI args. Throws with a clear message if none found. */
-export function resolveTarget(args: {
+export interface RuntimeTargetOptions {
   game?: string;
   install?: string;
-}): Target {
-  if (args.install) {
-    return { label: args.install, runtimeDir: runtimeDirFor(args.install) };
-  }
-  if (isSupportedGame(args.game)) {
-    const candidates = (
-      args.game === "se" ? DEFAULT_SE_INSTALLS : DEFAULT_VR_INSTALLS
-    ).map(runtimeDirFor);
-    const localAppDataDir = localAppDataDevbenchDir(args.game);
-    if (localAppDataDir) candidates.push(localAppDataDir);
-    const found = freshestExisting(candidates);
-    if (!found) {
-      throw new Error(
-        `Could not find a devbench install for --game ${args.game} in any default Steam ` +
-          `location. Pass --install <path-to-Skyrim-folder> instead.`,
-      );
-    }
-    return { label: args.game.toUpperCase(), runtimeDir: found };
-  }
-  throw new Error("devbench-bridge requires --game se|vr or --install <path>.");
+  runtimeFile?: string;
+  localAppData?: string;
 }
 
-/** Read the live port + base URL for a target, fresh every call. */
-export function resolveBaseUrl(target: Target): string {
-  const raw = readFileSync(join(target.runtimeDir, "runtime.json"), "utf-8");
-  const parsed = JSON.parse(raw) as RuntimeJson;
-  if (
-    !Number.isInteger(parsed.port) ||
-    parsed.port < 1 ||
-    parsed.port > 65535
-  ) {
+export interface CandidateFailure {
+  runtimeFile: string;
+  reason: string;
+}
+
+export function createRuntimeTarget(
+  options: RuntimeTargetOptions,
+): RuntimeTarget {
+  if (options.game !== undefined && options.game !== "fo4") {
     throw new Error(
-      `runtime.json at ${target.runtimeDir} has no valid "port" field (1-65535).`,
+      `unsupported --game ${options.game}; this bridge supports only --game fo4`,
     );
   }
-  return `http://127.0.0.1:${parsed.port}`;
+  if (
+    options.game === undefined &&
+    options.install === undefined &&
+    options.runtimeFile === undefined
+  ) {
+    throw new Error(
+      "devbench-bridge requires --game fo4, --install <Fallout 4 folder>, or --runtime-file <path>",
+    );
+  }
+
+  const files: string[] = [];
+  if (options.runtimeFile) files.push(resolve(options.runtimeFile));
+  if (options.install) {
+    files.push(
+      resolve(
+        options.install,
+        "Data",
+        "F4SE",
+        "Plugins",
+        "devbench",
+        "runtime.json",
+      ),
+    );
+  }
+  const localAppData = options.localAppData ?? process.env.LOCALAPPDATA;
+  if (localAppData) {
+    files.push(resolve(localAppData, "devbench", "fo4", "runtime.json"));
+  }
+
+  return {
+    game: "fo4",
+    label: options.install ?? "FO4",
+    runtimeFiles: [...new Set(files.map((file) => file.toLowerCase()))].map(
+      (lower) => files.find((file) => file.toLowerCase() === lower) as string,
+    ),
+    ...(options.install ? { install: resolve(options.install) } : {}),
+  };
+}
+
+export async function readRuntimeIdentity(
+  runtimeFile: string,
+): Promise<RuntimeIdentity> {
+  let raw: string;
+  try {
+    raw = await readFile(runtimeFile, "utf8");
+  } catch (error) {
+    throw new Error(`cannot read ${runtimeFile}: ${errorMessage(error)}`, {
+      cause: error,
+    });
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(`invalid JSON in ${runtimeFile}: ${errorMessage(error)}`, {
+      cause: error,
+    });
+  }
+  const object = requireObject(value, `runtime.json at ${runtimeFile}`);
+  const port = requireInteger(object, "port", "runtime.json");
+  const pid = requireInteger(object, "pid", "runtime.json");
+  if (port < 1 || port > 65535) {
+    throw new Error(`runtime.json at ${runtimeFile} has invalid port ${port}`);
+  }
+  if (pid < 1) {
+    throw new Error(`runtime.json at ${runtimeFile} has invalid pid ${pid}`);
+  }
+
+  let instanceId: string;
+  try {
+    instanceId = requireString(object, "instanceId", "runtime.json");
+  } catch {
+    throw new Error(
+      `runtime.json at ${runtimeFile} has no instanceId; upgrade the DevBench plugin before using the external bridge`,
+    );
+  }
+  const instanceMatch = /^([1-9]\d*)-([0-9A-F]{16})$/.exec(instanceId);
+  if (!instanceMatch || Number(instanceMatch[1]) !== pid) {
+    throw new Error(
+      `runtime.json at ${runtimeFile} has invalid instanceId '${instanceId}'; expected <pid>-<16 uppercase hex creation FILETIME ticks>`,
+    );
+  }
+
+  const exePath = requireString(object, "exePath", "runtime.json");
+  if (win32.basename(exePath).toLowerCase() !== "fallout4.exe") {
+    throw new Error(
+      `runtime.json at ${runtimeFile} identifies unsupported executable ${exePath}; expected Fallout4.exe`,
+    );
+  }
+  const dllPath = requireString(object, "dllPath", "runtime.json");
+  if (win32.basename(dllPath).toLowerCase() !== "devbench.dll") {
+    throw new Error(
+      `runtime.json at ${runtimeFile} identifies unsupported plugin ${dllPath}; expected devbench.dll`,
+    );
+  }
+
+  return {
+    runtimeFile,
+    port,
+    pid,
+    instanceId,
+    exePath,
+    runtime: requireString(object, "runtime", "runtime.json"),
+    dllPath,
+  };
+}
+
+export function validateInstallIdentity(
+  target: RuntimeTarget,
+  identity: RuntimeIdentity,
+): void {
+  if (!target.install) return;
+  const expected = join(target.install, "Fallout4.exe");
+  if (!sameWindowsPath(identity.exePath, expected)) {
+    throw new Error(
+      `runtime identity exePath ${identity.exePath} is outside the selected install; expected ${expected}`,
+    );
+  }
+}
+
+export function sameWindowsPath(left: string, right: string): boolean {
+  return normalizeWindowsPath(left) === normalizeWindowsPath(right);
+}
+
+function normalizeWindowsPath(value: string): string {
+  return win32.normalize(value).replace(/[\\/]+$/, "").toLowerCase();
+}
+
+export function sameIdentity(
+  left: RuntimeIdentity,
+  right: RuntimeIdentity,
+): boolean {
+  return (
+    left.pid === right.pid &&
+    left.port === right.port &&
+    left.instanceId === right.instanceId &&
+    sameWindowsPath(left.exePath, right.exePath) &&
+    left.runtime === right.runtime &&
+    sameWindowsPath(left.dllPath, right.dllPath)
+  );
 }

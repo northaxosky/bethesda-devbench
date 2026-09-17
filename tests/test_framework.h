@@ -48,13 +48,19 @@ namespace tf
 	inline int run()
 	{
 		int failed = 0;
-		for (auto& c : cases()) {
+		for (auto& c : cases())
+		{
 			const int before = failures();
-			try {
+			try
+			{
 				c.fn();
-			} catch (const std::exception& e) {
+			}
+			catch (const std::exception& e)
+			{
 				fail(__FILE__, __LINE__, std::string("unexpected exception: ") + e.what());
-			} catch (...) {
+			}
+			catch (...)
+			{
 				fail(__FILE__, __LINE__, "unexpected non-std exception");
 			}
 			const bool ok = failures() == before;
@@ -78,47 +84,44 @@ namespace tf
 	static void TF_CONCAT(tf_case_, __LINE__)()
 
 #define CHECK(cond)                                                 \
-	do {                                                            \
+	do                                                              \
+	{                                                               \
 		if (!(cond))                                                \
 			::tf::fail(__FILE__, __LINE__, "CHECK failed: " #cond); \
 	} while (0)
 
 #define CHECK_MESSAGE(cond, msg)                   \
-	do {                                           \
+	do                                             \
+	{                                              \
 		if (!(cond))                               \
 			::tf::fail(__FILE__, __LINE__, (msg)); \
 	} while (0)
 
 #define CHECK_THROWS(expr)                                                     \
-	do {                                                                       \
+	do                                                                         \
+	{                                                                          \
 		bool tf_threw = false;                                                 \
-		try {                                                                  \
+		try                                                                    \
+		{                                                                      \
 			(void)(expr);                                                      \
-		} catch (...) {                                                        \
+		}                                                                      \
+		catch (...)                                                            \
+		{                                                                      \
 			tf_threw = true;                                                   \
 		}                                                                      \
 		if (!tf_threw)                                                         \
 			::tf::fail(__FILE__, __LINE__, "expected exception from: " #expr); \
 	} while (0)
 
-#define CHECK_THROWS_AS(expr, exception_type)                                            \
-	do {                                                                                 \
-		bool tf_threw_expected = false;                                                  \
-		try {                                                                            \
-			(void)(expr);                                                                \
-		} catch (const exception_type&) {                                                \
-			tf_threw_expected = true;                                                    \
-		} catch (...) {                                                                  \
-		}                                                                                \
-		if (!tf_threw_expected)                                                          \
-			::tf::fail(__FILE__, __LINE__, "expected " #exception_type " from: " #expr); \
-	} while (0)
-
 #define CHECK_NOTHROW(expr)                                                      \
-	do {                                                                         \
-		try {                                                                    \
+	do                                                                           \
+	{                                                                            \
+		try                                                                      \
+		{                                                                        \
 			(void)(expr);                                                        \
-		} catch (...) {                                                          \
+		}                                                                        \
+		catch (...)                                                              \
+		{                                                                        \
 			::tf::fail(__FILE__, __LINE__, "unexpected exception from: " #expr); \
 		}                                                                        \
 	} while (0)

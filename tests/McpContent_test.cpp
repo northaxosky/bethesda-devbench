@@ -25,7 +25,8 @@ namespace
 TEST_CASE("content is always a non-empty array of blocks")
 {
 	for (const json& v : { json::object(), json("hi"), json(42), json(nullptr),
-			 json::array({ 1, 2 }), json{ { "ok", true } } }) {
+			 json::array({ 1, 2 }), json{ { "ok", true } } })
+	{
 		const json content = ToContentBlocks(v);
 		CHECK_MESSAGE(content.is_array(), "content must be an array for value: " + v.dump());
 		CHECK(!content.empty());

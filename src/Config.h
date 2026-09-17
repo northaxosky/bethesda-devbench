@@ -11,8 +11,12 @@ namespace dvb
 	struct Config
 	{
 		bool        enabled = true;     ///< start the MCP/REST server at all
-		int         port = 8920;        ///< localhost port for /mcp and /api (default SE/AE 8920, VR 8921 — LoadConfig)
+		int         port = 8930;        ///< localhost port for /mcp and /api
 		std::string logLevel = "info";  ///< trace|debug|info|warn|error (spdlog level)
+		bool        allowConsoleCommands = false;
+		bool        allowGameActions = false;
+		bool        allowControlActions = false;
+		bool        allowPapyrusCalls = false;
 
 		// In-game hotkeys (DXScanCode; 0 = disabled). Let recording/replay run with no
 		// MCP/REST client connected — the standalone-benchmark path. Ignored while the
@@ -23,7 +27,7 @@ namespace dvb
 		bool        replayHotkeyShift = false;  ///< require Shift held with replayHotkey
 		std::string replayPath = "";            ///< replay target; empty = most recent recording
 		bool        replayRestoreScene = true;  ///< replay hotkey re-establishes the recorded scene
-		int         recordIntervalMs = 10;      ///< default record sample interval (ms; 10..1800000); per-call intervalMs overrides
+		int         recordIntervalMs = 10;      ///< default record sample interval (ms; min 10); per-call intervalMs overrides
 
 		// Autorun: replay a recording once on the first load of the session — a fully
 		// unattended benchmark with no client and no keypress. Empty = off.
@@ -58,7 +62,7 @@ namespace dvb
 		// relative to the game install root (GetModuleFileNameW's parent dir — vanilla screenshots
 		// and Open Shaders' own default capture path both resolve there, NOT Documents/My Games,
 		// which is a different, SKSE-log-specific convention); "" means the root itself.
-		std::string              captureDir = "Data/SKSE/Plugins/devbench/captures";
+		std::string              captureDir = "Data/F4SE/Plugins/devbench/captures";
 		std::vector<std::string> captureScanDirs = { "", "Screenshots" };
 		int                      captureTimeoutMs = 8000;
 		int                      captureSettleMs = 500;  // default settle before a checkpoint capture
@@ -70,13 +74,10 @@ namespace dvb
 		int stallWatchdogMs = 5000;
 	};
 
-	// Load Data/SKSE/Plugins/devbench/config.json. If the file is missing it is
-	// auto-created with the current defaults (so users/agents discover the keys); a
-	// parse error → defaults (logged). Never throws.
+	// Load Data/F4SE/Plugins/devbench/config.json. If the file is missing it is
+	// auto-created with the current defaults. Invalid or unreadable config aborts startup.
 	Config LoadConfig();
 
-	// Persist just the four hotkey keys into config.json, preserving every other key. Written from
-	// the render thread (in-menu rebind), so it writes a temp file then renames it over the target
-	// (atomic replace) — a concurrent reader never sees a half-written file. Never throws.
+	// Preserve other keys; invalid config or a failed atomic replacement throws.
 	void SaveHotkeys(int a_recordKey, bool a_recordShift, int a_replayKey, bool a_replayShift);
 }
