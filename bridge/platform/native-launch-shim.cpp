@@ -243,10 +243,8 @@ namespace
 		}
 		localAppData.resize(copied);
 		const std::wstring devbenchDirectory = localAppData + L"\\devbench";
-		const std::wstring logDirectory = devbenchDirectory + L"\\fo4";
 		EnsureDirectory(devbenchDirectory);
-		EnsureDirectory(logDirectory);
-		const std::wstring logPath = logDirectory + L"\\launch-shim.log";
+		const std::wstring logPath = devbenchDirectory + L"\\launch-shim.log";
 		Handle             log(CreateFileW(
 			logPath.c_str(),
 			GENERIC_WRITE,
@@ -922,13 +920,13 @@ namespace
 				{
 					throw Error(
 						"OWNERSHIP_UNPROVEN",
-						"A game appeared outside the retained F4SE loader's direct ancestry.");
+						"A game appeared outside the retained script extender loader's direct ancestry.");
 				}
 				return RetainGame(candidate);
 			}
 			Sleep(kPollMilliseconds);
 		}
-		throw Error("START_TIMEOUT", "F4SE did not create a provably owned game before the launch deadline.");
+		throw Error("START_TIMEOUT", "The script extender did not create a provably owned game before the launch deadline.");
 	}
 
 	[[nodiscard]] OwnedGame TryRetainDirectGameForCleanup(
@@ -1000,18 +998,18 @@ namespace
 	{
 		if (!FindExactImage(a_canonicalGame).empty())
 		{
-			throw Error("GAME_ALREADY_RUNNING", "A game appeared before the shim launched F4SE.");
+			throw Error("GAME_ALREADY_RUNNING", "A game appeared before the shim launched the script extender.");
 		}
 
 		const std::wstring canonicalLoader = CanonicalizeExistingFile(a_loaderOffer);
 		const std::wstring gameParent = ParentPath(a_canonicalGame);
 		if (!SamePath(ParentPath(canonicalLoader), gameParent))
 		{
-			throw Error("INVALID_LOADER_PATH", "The F4SE loader must be beside the configured game executable.");
+			throw Error("INVALID_LOADER_PATH", "The script extender loader must be beside the configured game executable.");
 		}
 		if (CurrentFileTime() >= a_deadline)
 		{
-			throw Error("START_TIMEOUT", "The launch authorization expired before F4SE could start.");
+			throw Error("START_TIMEOUT", "The launch authorization expired before the script extender could start.");
 		}
 
 		std::wstring         commandLine = QuoteCommandArgument(canonicalLoader);
@@ -1032,7 +1030,7 @@ namespace
 				&startup,
 				&process))
 		{
-			ThrowLastError("LOADER_START_FAILED", "Starting the configured F4SE loader");
+			ThrowLastError("LOADER_START_FAILED", "Starting the configured script extender loader");
 		}
 		a_guard.loader.Reset(process.hProcess);
 		Handle loaderThread(process.hThread);
@@ -1187,7 +1185,7 @@ namespace
 					throw Error(
 						error.Code(),
 						std::string(error.what()) +
-							" F4SE was started, but no remaining direct game process could be retained; verify MO2 state manually.");
+							" The script extender was started, but no remaining direct game process could be retained; verify MO2 state manually.");
 				}
 			}
 			throw;
@@ -1208,7 +1206,7 @@ int wmain(int a_argumentCount, wchar_t** a_arguments)
 		{
 			throw Error(
 				"INVALID_SHIM_CONFIG",
-				"Usage: devbench-launch.exe -GameExe <absolute Fallout4.exe path>.");
+				"Usage: devbench-launch.exe -GameExe <absolute game executable path>.");
 		}
 		return Run(a_arguments[2]);
 	}

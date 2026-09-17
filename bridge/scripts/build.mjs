@@ -35,6 +35,9 @@ function run(command, args, cwd = root) {
     delete env.FO4_DEV_MODS;
     delete env.XSE_FO4_MODS_PATH;
     delete env.XSE_FO4_GAME_PATH;
+    delete env.SkyrimPluginTargets;
+    delete env.XSE_TES5_MODS_PATH;
+    delete env.XSE_TES5_GAME_PATH;
     const child = spawn(command, args, { cwd, env, stdio: "inherit" });
     child.once("error", reject);
     child.once("exit", (code) => {

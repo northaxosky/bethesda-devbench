@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GameProfile.h"
 #include "ToolRegistry.h"
 
 #include <chrono>
@@ -27,11 +28,24 @@ namespace dvb::tools::recording
 		std::vector<std::string> warnings;
 	};
 
+	struct RecordingCompatibility
+	{
+		std::vector<std::string> gameIds;
+		std::vector<std::string> runtimeVariants;
+		bool                     supportsVR = false;
+	};
+
+	RecordingCompatibility RecordingCompatibilityForProfile(
+		const GameProfile& a_profile);
+
 	// Parses and validates the shared record/recordings/replay model. Foreign
 	// game/VR capabilities remain a hard error unless the caller explicitly
 	// accepts the downgrade.
 	ParsedRecording ParseRecording(
 		json a_document, bool a_allowForeignDowngrade = false);
+	ParsedRecording ParseRecording(
+		json a_document, const RecordingCompatibility& a_expected,
+		bool a_allowForeignDowngrade = false);
 
 	std::string SerializeRecording(const json& a_document);
 

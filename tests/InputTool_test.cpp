@@ -21,9 +21,9 @@ namespace
 		std::deque<DispatchResult> immediate;
 		int                        dispatchCount = 0;
 
-		KeyboardBackend Backend()
+		InputBackend Backend()
 		{
-			return KeyboardBackend{
+			return InputBackend{
 				.injection = "test.queue",
 				.available = true,
 				.dispatch = [this](ButtonCommand a_command) {

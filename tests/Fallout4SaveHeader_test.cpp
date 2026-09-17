@@ -1,6 +1,6 @@
 #include "test_framework.h"
 
-#include "tools/game/Fallout4SaveHeader.h"
+#include "game/fallout4/data/Fallout4SaveHeader.h"
 
 #include <cstring>
 #include <vector>

@@ -2,6 +2,11 @@ import { readFile } from "node:fs/promises";
 import { join, resolve, win32 } from "node:path";
 
 import {
+  profileForExecutable,
+  resolveGameProfile,
+  type GameProfile,
+} from "./discovery/manifest.js";
+import {
   errorMessage,
   requireInteger,
   requireObject,
@@ -19,7 +24,8 @@ export interface RuntimeIdentity {
 }
 
 export interface RuntimeTarget {
-  game: "fo4";
+  game: string;
+  profile: GameProfile;
   label: string;
   runtimeFiles: string[];
   install?: string;
@@ -40,18 +46,14 @@ export interface CandidateFailure {
 export function createRuntimeTarget(
   options: RuntimeTargetOptions,
 ): RuntimeTarget {
-  if (options.game !== undefined && options.game !== "fo4") {
-    throw new Error(
-      `unsupported --game ${options.game}; this bridge supports only --game fo4`,
-    );
-  }
+  const profile = resolveGameProfile(options.game ?? "fo4");
   if (
     options.game === undefined &&
     options.install === undefined &&
     options.runtimeFile === undefined
   ) {
     throw new Error(
-      "devbench-bridge requires --game fo4, --install <Fallout 4 folder>, or --runtime-file <path>",
+      "devbench-bridge requires --game <id>, --install <game folder>, or --runtime-file <path>",
     );
   }
 
@@ -62,7 +64,7 @@ export function createRuntimeTarget(
       resolve(
         options.install,
         "Data",
-        "F4SE",
+        profile.extender,
         "Plugins",
         "devbench",
         "runtime.json",
@@ -71,12 +73,13 @@ export function createRuntimeTarget(
   }
   const localAppData = options.localAppData ?? process.env.LOCALAPPDATA;
   if (localAppData) {
-    files.push(resolve(localAppData, "devbench", "fo4", "runtime.json"));
+    files.push(resolve(localAppData, "devbench", profile.id, "runtime.json"));
   }
 
   return {
-    game: "fo4",
-    label: options.install ?? "FO4",
+    game: profile.id,
+    profile,
+    label: options.install ?? profile.displayName,
     runtimeFiles: [...new Set(files.map((file) => file.toLowerCase()))].map(
       (lower) => files.find((file) => file.toLowerCase() === lower) as string,
     ),
@@ -130,10 +133,14 @@ export async function readRuntimeIdentity(
   }
 
   const exePath = requireString(object, "exePath", "runtime.json");
-  if (win32.basename(exePath).toLowerCase() !== "fallout4.exe") {
+  const profile = profileForExecutable(exePath);
+  if (!profile) {
     throw new Error(
-      `runtime.json at ${runtimeFile} identifies unsupported executable ${exePath}; expected Fallout4.exe`,
+      `runtime.json at ${runtimeFile} identifies unsupported executable ${exePath}`,
     );
+  }
+  if (object.gameId !== undefined && object.gameId !== profile.id) {
+    throw new Error(`runtime.json at ${runtimeFile} has a gameId inconsistent with ${exePath}`);
   }
   const dllPath = requireString(object, "dllPath", "runtime.json");
   if (win32.basename(dllPath).toLowerCase() !== "devbench.dll") {
@@ -153,12 +160,17 @@ export async function readRuntimeIdentity(
   };
 }
 
-export function validateInstallIdentity(
+export function validateTargetIdentity(
   target: RuntimeTarget,
   identity: RuntimeIdentity,
 ): void {
+  if (win32.basename(identity.exePath).toLowerCase() !== target.profile.executable.toLowerCase()) {
+    throw new Error(
+      `runtime identity identifies ${identity.exePath}; --game ${target.game} requires ${target.profile.executable}`,
+    );
+  }
   if (!target.install) return;
-  const expected = join(target.install, "Fallout4.exe");
+  const expected = join(target.install, target.profile.executable);
   if (!sameWindowsPath(identity.exePath, expected)) {
     throw new Error(
       `runtime identity exePath ${identity.exePath} is outside the selected install; expected ${expected}`,

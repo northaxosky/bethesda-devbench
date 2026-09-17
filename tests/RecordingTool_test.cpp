@@ -126,6 +126,41 @@ TEST_CASE("foreign recording capabilities require an explicit downgrade")
 	CHECK(!downgraded.warnings.empty());
 }
 
+TEST_CASE("recording compatibility distinguishes Skyrim desktop and VR")
+{
+	auto desktop = RecordingDocument();
+	desktop["meta"]["game"] = "se";
+	desktop["meta"]["runtime"] = json{
+		{ "recordedOnVR", false },
+		{ "compat", json::array({ "se", "ae" }) },
+	};
+	CHECK_NOTHROW(ParseRecording(
+		desktop,
+		dvb::tools::recording::RecordingCompatibilityForProfile(
+			dvb::SkyrimProfile(dvb::RuntimeVariant::kSkyrimAE))));
+	CHECK_THROWS(ParseRecording(
+		desktop,
+		dvb::tools::recording::RecordingCompatibilityForProfile(
+			dvb::SkyrimProfile(dvb::RuntimeVariant::kSkyrimVR))));
+
+	auto vr = RecordingDocument();
+	vr["meta"]["game"] = "vr";
+	vr["meta"]["runtime"] = json{
+		{ "recordedOnVR", true },
+		{ "compat", json::array({ "vr" }) },
+	};
+	vr["trackingSamples"] = json::array(
+		{ json{ { "tMs", 0 }, { "devices", json::array() } } });
+	CHECK_NOTHROW(ParseRecording(
+		vr,
+		dvb::tools::recording::RecordingCompatibilityForProfile(
+			dvb::SkyrimProfile(dvb::RuntimeVariant::kSkyrimVR))));
+	CHECK_THROWS(ParseRecording(
+		vr,
+		dvb::tools::recording::RecordingCompatibilityForProfile(
+			dvb::SkyrimProfile(dvb::RuntimeVariant::kSkyrimSE))));
+}
+
 TEST_CASE("recording atomic publication failure leaves no temporary artifact")
 {
 	TempRoot root;
@@ -545,7 +580,9 @@ TEST_CASE("active replay commands are not fed back into an active recording")
 	CHECK(done);
 	const auto stopped = registry.Invoke(
 		"record", json{ { "action", "stop" } }, ToolContext{});
-	CHECK(stopped.ok);
+	CHECK_MESSAGE(stopped.ok, stopped.errorMessage);
+	if (!stopped.ok)
+		return;
 	const auto document =
 		store.Load(stopped.value.at("file").get<std::string>());
 	CHECK(document.at("activityEvents").empty());

@@ -3,6 +3,12 @@
 // plugin itself is GPL-3.0. Compile this in YOUR plugin only (not in devbench).
 #include "DevBenchAPI.h"
 
+#if defined(DEVBENCH_API_SKSE)
+#	include <SKSE/SKSE.h>
+#else
+#	include <F4SE/F4SE.h>
+#endif
+
 // Consumer-side helper — compile this in YOUR plugin (devbench itself does not build it).
 DevBenchAPI::IDevBenchInterface001* g_devBenchInterface = nullptr;
 
@@ -13,7 +19,11 @@ namespace DevBenchAPI
 		if (g_devBenchInterface)
 			return g_devBenchInterface;
 
+#if defined(DEVBENCH_API_SKSE)
+		const auto messaging = SKSE::GetMessagingInterface();
+#else
 		const auto messaging = F4SE::GetMessagingInterface();
+#endif
 		if (!messaging)
 			return nullptr;
 

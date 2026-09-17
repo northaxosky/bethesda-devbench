@@ -113,7 +113,7 @@ const DEFAULT_TIMINGS: SessionTimings = {
 export const SESSION_TOOL: Tool = {
   name: "devbench.session",
   description:
-    "Control one explicitly configured, controller-owned Fallout 4 DevBench session. " +
+    "Control one explicitly configured, controller-owned DevBench game session. " +
     "status is always local. start/run are asynchronous and return a runId. run loads a required named fixture, waits for the correlated native operation and player readiness, runs a server-side scenario asynchronously, captures evidence, and stops or releases only the owned game. No deployment, profile edits, arbitrary commands, or adoption of pre-existing games.",
   inputSchema: {
     type: "object",
@@ -128,7 +128,7 @@ export const SESSION_TOOL: Tool = {
       fixture: {
         type: "string",
         minLength: 1,
-        description: "Extensionless Fallout 4 save basename required by run.",
+        description: "Extensionless game save basename required by run.",
       },
       steps: {
         type: "array",

@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace dvb
 {
@@ -76,17 +77,31 @@ namespace dvb::tools::input
 		std::optional<DispatchResult> result;
 	};
 
-	struct KeyboardBackend
+	struct InputBackend
 	{
+		std::string                                      gameName = "Fallout 4";
+		std::string                                      extenderName = "F4SE";
 		std::string                                      injection;
 		bool                                             available = false;
 		std::function<DispatchSubmission(ButtonCommand)> dispatch;
+
+		// Optional adapter-owned device family (for example Skyrim VR's atomic
+		// tracked-set provider). The shared input tool remains the only public
+		// dispatcher; native adapters contribute capabilities and handling here.
+		std::vector<std::string>                         nativeDevices;
+		std::function<json()>                            nativeCapabilities;
+		std::function<json(
+			const json&, const ToolContext&)>            handleNative;
+		std::function<void(EventBus&)>                   attachActivity;
+		std::function<void(bool)>                        setNativeReady;
+		std::function<void(std::string)>                 releaseNativeForLifecycle;
+		std::function<void()>                            shutdownNative;
 	};
 
 	class InputService final : public std::enable_shared_from_this<InputService>
 	{
 	public:
-		InputService(EventBus& a_events, bool a_allowControlActions, KeyboardBackend a_backend);
+		InputService(EventBus& a_events, bool a_allowControlActions, InputBackend a_backend);
 		~InputService();
 
 		InputService(const InputService&) = delete;
@@ -102,11 +117,11 @@ namespace dvb::tools::input
 		std::shared_ptr<State> state_;
 	};
 
-	ToolDescriptor BuildInputDescriptor();
+	ToolDescriptor BuildInputDescriptor(const InputBackend* a_backend = nullptr);
 
 	// The returned service is the lifetime root. Store it after Server so its destructor
 	// runs before the registry/EventBus, and call Shutdown before Server teardown.
 	std::shared_ptr<InputService> RegisterInputTool(
 		ToolRegistry& a_registry, EventBus& a_events, bool a_allowControlActions,
-		KeyboardBackend a_backend);
+		InputBackend a_backend);
 }

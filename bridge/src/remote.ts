@@ -9,7 +9,7 @@ import {
   readRuntimeIdentity,
   sameIdentity,
   sameWindowsPath,
-  validateInstallIdentity,
+  validateTargetIdentity,
   type CandidateFailure,
   type RuntimeIdentity,
   type RuntimeTarget,
@@ -103,7 +103,7 @@ export class RemoteClient {
             `Owned session instance changed from ${this.pinnedIdentity.instanceId} to ${identity.instanceId}; no command was dispatched`,
           );
         }
-        validateInstallIdentity(this.target, identity);
+        validateTargetIdentity(this.target, identity);
         const health = await this.fetchJson(identity, "/api/health", {
           timeoutMs: this.discoveryTimeoutMs,
           mutation: false,
@@ -122,7 +122,7 @@ export class RemoteClient {
         ? "no runtime.json candidates are configured"
         : failures.map((failure) => failure.reason).join("; ");
     throw new GameUnavailableError(
-      `Fallout 4 DevBench is unavailable: ${summary}`,
+      `${this.target.profile.displayName} DevBench is unavailable: ${summary}`,
       failures,
     );
   }

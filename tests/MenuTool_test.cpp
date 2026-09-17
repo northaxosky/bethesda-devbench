@@ -42,7 +42,7 @@ TEST_CASE("menu descriptor exposes the approved actions and conservative dialog 
 	CHECK(std::ranges::find(actions, "open") != actions.end());
 	CHECK(std::ranges::find(actions, "close") != actions.end());
 	CHECK(std::ranges::find(actions, "invoke") != actions.end());
-	CHECK(descriptor.description.find("cancelIndex is null") != std::string::npos);
+	CHECK(descriptor.description.find("cancelIndex") != std::string::npos);
 }
 
 TEST_CASE("menu reads remain available while control actions fail closed")
@@ -149,6 +149,8 @@ TEST_CASE("menu open is allowlisted and MessageBoxMenu cannot be hidden as cance
 	int                     opens = 0;
 	int                     closes = 0;
 	dvb::tools::MenuBackend backend{
+		.gameName = "Fallout 4",
+		.contextFreeOpenMenus = { "PauseMenu" },
 		.openMenu = [&](std::string a_name) {
 			++opens;
 			return json{ { "name", a_name } }; },

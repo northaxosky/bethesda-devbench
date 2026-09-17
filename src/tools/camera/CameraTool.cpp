@@ -246,8 +246,8 @@ namespace dvb::tools
 		ToolDescriptor descriptor;
 		descriptor.name = "camera";
 		descriptor.description =
-			"Read or control the Fallout 4 player camera. get returns the live POV, state id, "
-			"free-camera ownership, and available transform fields. setPov uses Fallout 4's "
+			"Read or control the native player camera. get returns the live POV, state id, "
+			"free-camera ownership, and available transform fields. setPov uses the adapter's "
 			"normal first/third-person transitions and its native auto-vanity entry path. "
 			"freecam enters/exits the native free-camera stack without freezing time, but only "
 			"exits a mode entered by DevBench. drive requires DevBench-owned free camera and "

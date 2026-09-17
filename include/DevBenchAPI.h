@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // This interface header, DevBenchAPIVersion.h, and companion DevBenchAPI.cpp are
-// MIT-licensed (see DevBenchAPI.LICENSE.txt) so ANY F4SE plugin — including
+// MIT-licensed (see DevBenchAPI.LICENSE.txt) so ANY F4SE or SKSE plugin — including
 // proprietary/closed-source — may vendor them to talk to devbench, independent
 // of the devbench plugin's GPL-3.0. Drop all three files into your plugin (or
 // consume the devbench-api vcpkg port) and build — no other devbench source is needed.
@@ -11,10 +11,7 @@
 
 #include <cstdint>
 
-#include <F4SE/F4SE.h>
-#include <RE/Fallout.h>
-
-// devbench cross-plugin API — lets another F4SE plugin register MCP/REST tools and
+// devbench cross-plugin API — lets another F4SE or SKSE plugin register MCP/REST tools and
 // emit events into the running devbench host. Usage: after F4SE sends your plugin
 // kPostLoad, request the interface via an F4SE messaging dispatch, then call through
 // the versioned abstract interface below.
@@ -49,7 +46,9 @@ namespace DevBenchAPI
 	};
 
 	struct IDevBenchInterface001;
-	// Call only after F4SE sends kPostLoad. Returns nullptr if devbench is absent.
+	// Call only after the native script extender sends kPostLoad. The companion
+	// DevBenchAPI.cpp defaults to F4SE for source compatibility; define
+	// DEVBENCH_API_SKSE when compiling it in a Skyrim consumer.
 	IDevBenchInterface001* GetDevBenchInterface001();
 
 	struct IDevBenchInterface001

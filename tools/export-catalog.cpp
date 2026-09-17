@@ -1,4 +1,5 @@
 #include "CorePch.h"
+#include "GameProfile.h"
 #include "tools/ToolCatalog.h"
 
 #include <Windows.h>
@@ -14,10 +15,27 @@ int wmain(int a_argc, wchar_t** a_argv)
 {
 	try
 	{
-		if (a_argc != 2)
-			throw std::runtime_error("usage: devbench-catalog <output.json>");
-		const std::filesystem::path output = std::filesystem::absolute(a_argv[1]);
-		const std::string           content = dvb::tools::BuildCoreToolCatalog().dump(2) + "\n";
+		if (a_argc != 2 && a_argc != 3)
+			throw std::runtime_error(
+				"usage: devbench-catalog [fo4|se|vr] <output.json>");
+		const std::filesystem::path output =
+			std::filesystem::absolute(a_argv[a_argc - 1]);
+		dvb::json catalog;
+		if (a_argc == 2)
+		{
+			catalog = dvb::tools::BuildCoreToolCatalogBundle();
+		}
+		else
+		{
+			const std::wstring game = a_argv[1];
+			const auto profile =
+				game == L"fo4" ? dvb::Fallout4Profile() :
+				game == L"se" ? dvb::SkyrimProfile(dvb::RuntimeVariant::kSkyrimAE) :
+				game == L"vr" ? dvb::SkyrimProfile(dvb::RuntimeVariant::kSkyrimVR) :
+					throw std::runtime_error("catalog game must be fo4, se, or vr");
+			catalog = dvb::tools::BuildCoreToolCatalog(profile);
+		}
+		const std::string content = catalog.dump(2) + "\n";
 		if (std::filesystem::exists(output))
 		{
 			std::ifstream existing(output, std::ios::binary);

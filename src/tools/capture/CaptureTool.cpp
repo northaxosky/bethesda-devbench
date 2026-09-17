@@ -1335,7 +1335,7 @@ namespace dvb::tools::capture
 	{
 		return json{
 			{ "description",
-				"List image files in configured Fallout 4 screenshot scan directories. Paths are "
+				"List image files in configured native screenshot scan directories. Paths are "
 				"resolved through open handles to physical files usable outside MO2/USVFS." },
 			{ "inputSchema", json{
 								 { "type", "object" },

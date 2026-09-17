@@ -55,10 +55,15 @@ namespace dvb
 {
 	Config ParseConfig(const json& a_document)
 	{
+		return ParseConfig(a_document, Config{});
+	}
+
+	Config ParseConfig(const json& a_document, Config a_defaults)
+	{
 		if (!a_document.is_object())
 			throw std::invalid_argument("config must be a JSON object");
 
-		Config config;
+		Config config = std::move(a_defaults);
 		Read(a_document, "enabled", config.enabled);
 		Read(a_document, "allowConsoleCommands", config.allowConsoleCommands);
 		Read(a_document, "allowGameActions", config.allowGameActions);
@@ -100,7 +105,11 @@ namespace dvb
 
 	json ConfigDefaults()
 	{
-		const Config config;
+		return ConfigDefaults(Config{});
+	}
+
+	json ConfigDefaults(const Config& config)
+	{
 		return json{
 			{ "enabled", config.enabled },
 			{ "allowConsoleCommands", config.allowConsoleCommands },
@@ -134,9 +143,19 @@ namespace dvb
 	ConfigLoadResult LoadConfigDocument(
 		json a_document, bool a_exists, const std::function<void(const json&)>& a_write)
 	{
-		ConfigLoadResult result{ ParseConfig(a_document), {} };
+		return LoadConfigDocument(
+			std::move(a_document), a_exists, Config{}, a_write);
+	}
+
+	ConfigLoadResult LoadConfigDocument(
+		json a_document, bool a_exists, Config a_defaults,
+		const std::function<void(const json&)>& a_write)
+	{
+		ConfigLoadResult result{
+			ParseConfig(a_document, a_defaults), {}
+		};
 		bool             changed = !a_exists;
-		const auto       defaults = ConfigDefaults();
+		const auto       defaults = ConfigDefaults(a_defaults);
 		for (const auto& [key, value] : defaults.items())
 		{
 			if (!a_document.contains(key))

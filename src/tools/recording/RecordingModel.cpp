@@ -75,6 +75,40 @@ namespace dvb::tools::recording
 			return false;
 		}
 
+		bool ContainsAsciiCaseInsensitive(
+			const std::vector<std::string>& a_values, std::string_view a_expected)
+		{
+			const auto expected = LowerAscii(std::string(a_expected));
+			return std::ranges::any_of(
+				a_values, [&](const std::string& a_value) {
+					return LowerAscii(a_value) == expected;
+				});
+		}
+
+		bool RuntimeCompatible(
+			const json& a_runtime, const RecordingCompatibility& a_expected)
+		{
+			if (!a_runtime.is_object() || a_expected.runtimeVariants.empty())
+				return true;
+			const auto compatibility = a_runtime.find("compat");
+			if (compatibility == a_runtime.end())
+				return true;
+			if (!compatibility->is_array())
+				throw ToolError(400, "'meta.runtime.compat' must be an array");
+			bool sawString = false;
+			for (const auto& value : *compatibility)
+			{
+				if (!value.is_string())
+					throw ToolError(
+						400, "'meta.runtime.compat' entries must be strings");
+				sawString = true;
+				if (ContainsAsciiCaseInsensitive(
+						a_expected.runtimeVariants, value.get<std::string>()))
+					return true;
+			}
+			return !sawString;
+		}
+
 		void ValidateCheckpoints(const json& a_meta)
 		{
 			const auto checkpoints = a_meta.find("checkpoints");
@@ -196,6 +230,24 @@ namespace dvb::tools::recording
 			}
 		}
 
+		void ValidateTracking(const json& a_samples)
+		{
+			std::int64_t previous = -1;
+			for (const auto& sample : a_samples)
+			{
+				if (!sample.is_object())
+					throw ToolError(
+						400, "each recording tracking sample must be an object");
+				const auto at = ReadTimelineTime(
+					sample, "recording tracking sample");
+				if (at <= previous)
+					throw ToolError(
+						400,
+						"recording tracking sample 'tMs' values must be strictly increasing");
+				previous = at;
+			}
+		}
+
 		void ValidateSteps(const json& a_steps)
 		{
 			for (const auto& step : a_steps)
@@ -252,6 +304,26 @@ namespace dvb::tools::recording
 	ParsedRecording ParseRecording(
 		json a_document, bool a_allowForeignDowngrade)
 	{
+		return ParseRecording(
+			std::move(a_document),
+			RecordingCompatibilityForProfile(Fallout4Profile()),
+			a_allowForeignDowngrade);
+	}
+
+	RecordingCompatibility RecordingCompatibilityForProfile(
+		const GameProfile& a_profile)
+	{
+		return {
+			.gameIds = a_profile.recordingGameIds,
+			.runtimeVariants = a_profile.recordingRuntimeCompatibility,
+			.supportsVR = a_profile.vr,
+		};
+	}
+
+	ParsedRecording ParseRecording(
+		json a_document, const RecordingCompatibility& a_expected,
+		bool a_allowForeignDowngrade)
+	{
 		if (!a_document.is_object())
 			throw ToolError(400, "recording root must be an object");
 		auto meta = a_document.find("meta");
@@ -300,12 +372,16 @@ namespace dvb::tools::recording
 		ValidateSteps(*steps);
 		RequireArray(a_document, "activityEvents", kMaximumActivityEvents);
 		RequireArray(a_document, "samples", kMaximumTrajectorySamples);
+		RequireArray(a_document, "trackingSamples", kMaximumTrajectorySamples);
 		if (const auto samples = a_document.find("samples");
 			samples != a_document.end())
 			ValidateSamples(*samples);
 		if (const auto activity = a_document.find("activityEvents");
 			activity != a_document.end())
 			ValidateActivity(*activity);
+		if (const auto tracking = a_document.find("trackingSamples");
+			tracking != a_document.end())
+			ValidateTracking(*tracking);
 		ValidateCheckpoints(*meta);
 
 		const auto gameValue = meta->find("game");
@@ -316,8 +392,8 @@ namespace dvb::tools::recording
 				std::string{} :
 				gameValue->get<std::string>());
 		const bool explicitForeign =
-			!game.empty() && game != "fo4" && game != "fallout4" &&
-			game != "fallout 4";
+			!game.empty() &&
+			!ContainsAsciiCaseInsensitive(a_expected.gameIds, game);
 		const auto runtime = meta->value("runtime", json(nullptr));
 		if (!runtime.is_null() && !runtime.is_object())
 			throw ToolError(400, "'meta.runtime' must be an object");
@@ -328,15 +404,24 @@ namespace dvb::tools::recording
 				throw ToolError(
 					400, "'meta.runtime.recordedOnVR' must be a boolean");
 		}
+		const auto tracking = a_document.find("trackingSamples");
+		const bool hasTracking =
+			tracking != a_document.end() && tracking->is_array() &&
+			!tracking->empty();
 		const bool vrClaim =
 			(runtime.is_object() &&
 				runtime.value("recordedOnVR", false)) ||
-			a_document.contains("trackingSamples") ||
+			hasTracking ||
 			ContainsVrClaim(meta->value("capabilities", json::array()));
 		const bool unmarkedForeign =
 			game.empty() && out.legacy &&
-			(vrClaim || meta->contains("trackingCapture"));
-		out.foreignCapability = explicitForeign || vrClaim || unmarkedForeign;
+			(vrClaim || meta->contains("trackingCapture")) &&
+			!a_expected.supportsVR;
+		const bool incompatibleVr = vrClaim && !a_expected.supportsVR;
+		const bool incompatibleRuntime = !RuntimeCompatible(runtime, a_expected);
+		out.foreignCapability =
+			explicitForeign || incompatibleVr || incompatibleRuntime ||
+			unmarkedForeign;
 		if (out.foreignCapability)
 		{
 			if (!a_allowForeignDowngrade)
@@ -370,11 +455,12 @@ namespace dvb::tools::recording
 		for (const auto& [key, value] : a_document.items())
 		{
 			if (key == "meta" || key == "steps" || key == "activityEvents" ||
-				key == "samples")
+				key == "samples" || key == "trackingSamples")
 				continue;
 			output += ",\n" + json(key).dump() + ": " + value.dump(2);
 		}
 		AppendCompactArray("samples");
+		AppendCompactArray("trackingSamples");
 		AppendCompactArray("activityEvents");
 		AppendCompactArray("steps");
 		output += "\n}\n";

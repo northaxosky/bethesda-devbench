@@ -8,7 +8,9 @@
 #include <atomic>
 #include <cstdint>
 #include <fstream>
-#include <thread>
+#include <future>
+#include <memory>
+#include <stdexcept>
 
 using dvb::json;
 using dvb::ToolContext;
@@ -21,6 +23,7 @@ namespace
 	using dvb::tools::capture::CaptureBackend;
 	using dvb::tools::capture::CaptureConfiguration;
 	using dvb::tools::capture::CaptureService;
+	constexpr auto kArtifactTimeout = 2s;
 
 	class TemporaryRoot
 	{
@@ -113,7 +116,7 @@ namespace
 			CaptureConfiguration configuration{
 				.captureDirectory = "captures",
 				.scanDirectories = { "native" },
-				.timeout = 150ms,
+				.timeout = kArtifactTimeout,
 				.settle = 0ms,
 			};
 			CaptureBackend backend{
@@ -130,7 +133,7 @@ namespace
 		dvb::ToolResult Invoke(json a_args)
 		{
 			if (!a_args.contains("timeoutMs"))
-				a_args["timeoutMs"] = 150;
+				a_args["timeoutMs"] = std::chrono::duration_cast<std::chrono::milliseconds>(kArtifactTimeout).count();
 			if (!a_args.contains("pollMs"))
 				a_args["pollMs"] = 10;
 			return registry.Invoke("capture", a_args, ToolContext{});
@@ -283,18 +286,14 @@ TEST_CASE("capture provider supports late readiness while making missing event d
 {
 	Harness           harness;
 	const std::string key = "capture-late-provider";
-	std::jthread      publisher;
+	json              lateEvent;
 	RegisterProvider(key, [&](const json& a_args, const ToolContext&) {
 		WriteBmp24(fs::path(a_args.at("outputPath").get<std::string>()));
-		const auto requestId = a_args.at("requestId").get<std::string>();
-		publisher = std::jthread([&, requestId] {
-			std::this_thread::sleep_for(80ms);
-			harness.events.Publish("capture.ready", json{
-														{ "requestId", requestId },
-														{ "ok", true },
-														{ "uiExcluded", true },
-													});
-		});
+		lateEvent = json{
+			{ "requestId", a_args.at("requestId") },
+			{ "ok", true },
+			{ "uiExcluded", true },
+		};
 		return json::object();
 	});
 
@@ -302,7 +301,10 @@ TEST_CASE("capture provider supports late readiness while making missing event d
 		{ "kind", key },
 		{ "checkpointId", "late" },
 	});
-	CHECK(result.ok);
+	CHECK_MESSAGE(result.ok, result.errorMessage);
+	if (!result.ok)
+		return;
+	harness.events.Publish("capture.ready", std::move(lateEvent));
 	CHECK(result.value.at("readyBy") == "poll");
 	CHECK(result.value.at("inconclusive") == true);
 	CHECK(HasDegraded(result.value, "providerReadyEventMissing"));
@@ -349,35 +351,46 @@ TEST_CASE("capture provider failure event is terminal and event success without 
 
 TEST_CASE("capture waits through an exclusive writer lock and a temporarily partial image")
 {
-	Harness           lockedHarness;
-	const std::string lockedKey = "capture-locked-provider";
-	std::jthread      unlocker;
+	Harness                                         lockedHarness;
+	const std::string                               lockedKey = "capture-locked-provider";
+	std::unique_ptr<void, decltype(&::CloseHandle)> lock(nullptr, &::CloseHandle);
+	std::promise<void>                              lockedReady;
+	auto                                            lockCreated = lockedReady.get_future();
 	RegisterProvider(lockedKey, [&](const json& a_args, const ToolContext&) {
 		const fs::path output = a_args.at("outputPath").get<std::string>();
 		WriteBmp24(output);
 		const HANDLE handle = ::CreateFileW(
 			output.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-		CHECK(handle != INVALID_HANDLE_VALUE);
-		unlocker = std::jthread([handle] {
-			std::this_thread::sleep_for(60ms);
-			::CloseHandle(handle);
-		});
+		if (handle == INVALID_HANDLE_VALUE)
+			throw std::runtime_error("could not exclusively lock the capture fixture");
+		lock.reset(handle);
 		lockedHarness.events.Publish("capture.ready", json{
 														  { "requestId", a_args.at("requestId") },
 														  { "ok", true },
 														  { "uiExcluded", true },
 													  });
+		lockedReady.set_value();
 		return json::object();
 	});
-	CHECK(lockedHarness.Invoke(json{
-								   { "kind", lockedKey },
-								   { "checkpointId", "locked" },
-							   })
-			.ok);
+	auto       lockedCapture = std::async(std::launch::async, [&] {
+		return lockedHarness.Invoke(json{
+			{ "kind", lockedKey },
+			{ "checkpointId", "locked" },
+		});
+	});
+	const bool haveLock = lockCreated.wait_for(kArtifactTimeout) == std::future_status::ready;
+	CHECK(haveLock);
+	if (!haveLock)
+		return;
+	CHECK(lockedCapture.wait_for(50ms) == std::future_status::timeout);
+	lock.reset();
+	const auto locked = lockedCapture.get();
+	CHECK_MESSAGE(locked.ok, locked.errorMessage);
 
-	Harness           partialHarness;
-	const std::string partialKey = "capture-partial-provider";
-	std::jthread      finisher;
+	Harness                partialHarness;
+	const std::string      partialKey = "capture-partial-provider";
+	std::promise<fs::path> partialReady;
+	auto                   partialCreated = partialReady.get_future();
 	RegisterProvider(partialKey, [&](const json& a_args, const ToolContext&) {
 		const fs::path output = a_args.at("outputPath").get<std::string>();
 		fs::create_directories(output.parent_path());
@@ -385,23 +398,28 @@ TEST_CASE("capture waits through an exclusive writer lock and a temporarily part
 			std::ofstream partial(output, std::ios::binary | std::ios::trunc);
 			partial << "BMpartial";
 		}
-		finisher = std::jthread([output] {
-			std::this_thread::sleep_for(60ms);
-			WriteBmp24(output);
-		});
 		partialHarness.events.Publish("capture.ready", json{
 														   { "requestId", a_args.at("requestId") },
 														   { "ok", true },
 														   { "uiExcluded", true },
 													   });
+		partialReady.set_value(output);
 		return json::object();
 	});
-	const auto partial = partialHarness.Invoke(json{
-		{ "kind", partialKey },
-		{ "checkpointId", "partial" },
-		{ "timeoutMs", 500 },
+	auto       partialCapture = std::async(std::launch::async, [&] {
+		return partialHarness.Invoke(json{
+			{ "kind", partialKey },
+			{ "checkpointId", "partial" },
+		});
 	});
-	CHECK(partial.ok);
+	const bool havePartial = partialCreated.wait_for(kArtifactTimeout) == std::future_status::ready;
+	CHECK(havePartial);
+	if (!havePartial)
+		return;
+	CHECK(partialCapture.wait_for(50ms) == std::future_status::timeout);
+	WriteBmp24(partialCreated.get());
+	const auto partial = partialCapture.get();
+	CHECK_MESSAGE(partial.ok, partial.errorMessage);
 	if (partial.ok)
 		CHECK(partial.value.at("width") == 16);
 }
@@ -475,7 +493,8 @@ TEST_CASE("capture rejects traversal and never dispatches onto an existing outpu
 		{ "kind", key },
 		{ "checkpointId", "same-output" },
 	};
-	CHECK(harness.Invoke(request).ok);
+	const auto first = harness.Invoke(request);
+	CHECK_MESSAGE(first.ok, first.errorMessage);
 	CHECK(harness.Invoke(request).errorCode == 409);
 	CHECK(dispatches == 1);
 }
@@ -497,11 +516,11 @@ TEST_CASE("capture rejects a permanently bad image after allowing completion tim
 	const auto result = harness.Invoke(json{
 		{ "kind", key },
 		{ "checkpointId", "bad-image" },
-		{ "timeoutMs", 60 },
+		{ "timeoutMs", 1000 },
 	});
 	CHECK(!result.ok);
-	CHECK(result.errorCode == 422);
-	CHECK(result.errorMessage.find("decodable") != std::string::npos);
+	CHECK_MESSAGE(result.errorCode == 422, result.errorMessage);
+	CHECK_MESSAGE(result.errorMessage.find("decodable") != std::string::npos, result.errorMessage);
 }
 
 TEST_CASE("capture preserves region thresholds while provider degradation makes the verdict inconclusive")
@@ -532,7 +551,9 @@ TEST_CASE("capture preserves region thresholds while provider degradation makes 
 						 json{ { "name", "right" }, { "x", 0.5 }, { "y", 0.0 }, { "w", 0.5 }, { "h", 1.0 }, { "threshold", 0.99 } },
 					 }) },
 	});
-	CHECK(result.ok);
+	CHECK_MESSAGE(result.ok, result.errorMessage);
+	if (!result.ok)
+		return;
 	CHECK(result.value.at("passed") == true);
 	CHECK(result.value.at("regions").size() == 2);
 	CHECK(result.value.at("threshold") == 0.98);

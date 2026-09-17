@@ -1,6 +1,6 @@
 #include "test_framework.h"
 
-#include "tools/game/Fallout4Calendar.h"
+#include "game/fallout4/data/Fallout4Calendar.h"
 
 #include <cmath>
 

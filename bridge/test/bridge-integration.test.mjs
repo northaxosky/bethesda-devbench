@@ -9,7 +9,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 
-import { CORE_TOOLS } from "../dist/catalog.js";
+import { coreTools } from "../dist/catalog.js";
+import { SessionConfigProvider } from "../dist/config.js";
 import { IdentityChangedError, RemoteClient, UncertainMutationError } from "../dist/remote.js";
 import {
   createRuntimeTarget,
@@ -18,24 +19,26 @@ import {
 
 const bridgeEntry = new URL("../dist/index.js", import.meta.url).pathname.slice(1);
 
-test("Node bridge cold-starts with only --game fo4 and no runtime file", async (t) => {
+test("Node bridge cold-starts with the selected game's offline catalog", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devbench-bridge-cold-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const { client } = await startBridge(undefined, join(root, "local"));
-  t.after(() => client.close());
+  for (const game of ["fo4", "se", "vr"]) {
+    const { client } = await startBridge(undefined, join(root, "local"), game);
+    t.after(() => client.close());
 
-  const tools = await client.listTools();
-  assert.deepEqual(tools.tools.map((tool) => tool.name), offlineToolNames());
-  assert.ok(tools.tools.slice(1).every((tool) => tool.description.includes("Offline schema")));
-  const offlinePing = await client.callTool({ name: "ping", arguments: {} });
-  assert.equal(offlinePing.isError, true);
-  assert.equal(JSON.parse(textResult(offlinePing)).availability, "offline");
-  const status = await client.callTool({
-    name: "devbench.session",
-    arguments: { action: "status" },
-  });
-  assert.equal(status.isError, undefined);
-  assert.equal(JSON.parse(textResult(status)).available, true);
+    const tools = await client.listTools();
+    assert.deepEqual(tools.tools.map((tool) => tool.name), offlineToolNames(game));
+    assert.ok(tools.tools.slice(1).every((tool) => tool.description.includes("Offline schema")));
+    const offlinePing = await client.callTool({ name: "ping", arguments: {} });
+    assert.equal(offlinePing.isError, true);
+    assert.equal(JSON.parse(textResult(offlinePing)).availability, "offline");
+    const status = await client.callTool({
+      name: "devbench.session",
+      arguments: { action: "status" },
+    });
+    assert.equal(status.isError, undefined);
+    assert.equal(JSON.parse(textResult(status)).available, true);
+  }
 });
 
 test("cold offline bridge reconnects across new ports and instances", async (t) => {
@@ -114,9 +117,64 @@ test("cold offline bridge reconnects across new ports and instances", async (t) 
   assert.equal(transport.pid === null, false);
 });
 
-function offlineToolNames() {
-  return ["devbench.session", ...CORE_TOOLS.map((tool) => tool.name)];
+function offlineToolNames(game = "fo4") {
+  return ["devbench.session", ...coreTools(game).map((tool) => tool.name)];
 }
+
+test("explicit runtime files cannot attach to another game before HTTP dispatch", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devbench-game-identity-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtimeFile = join(root, "runtime.json");
+  const mock = await startMock({
+    instanceId: instanceId(4301, "01DC000000000009"),
+    pid: 4301,
+    exePath: "C:\\Games\\Skyrim Special Edition\\SkyrimSE.exe",
+    runtime: "1.6.1170.0",
+    descriptors: [],
+  });
+  t.after(() => mock.close());
+  await writeRuntime(runtimeFile, mock);
+  const wrongGame = new RemoteClient(createRuntimeTarget({
+    game: "fo4", runtimeFile, localAppData: join(root, "local"),
+  }));
+  await assert.rejects(
+    wrongGame.callTool("game", { action: "load", name: "fixture" }, { mutation: true }),
+    /--game fo4 requires Fallout4.exe/,
+  );
+  assert.equal(mock.healthCalls, 0);
+  assert.equal(mock.toolCalls, 0);
+
+  const selected = new RemoteClient(createRuntimeTarget({
+    game: "skyrimse", runtimeFile, localAppData: join(root, "local"),
+  }));
+  assert.equal((await selected.resolve()).identity.instanceId, mock.instanceId);
+  await writeFile(runtimeFile, JSON.stringify({ ...mock, gameId: "fo4" }));
+  await assert.rejects(readRuntimeIdentity(runtimeFile), /gameId inconsistent/);
+  assert.equal(mock.toolCalls, 0);
+});
+
+test("game aliases isolate runtime and controller state and reject the Starfield placeholder", () => {
+  for (const [alias, id, extender, executable] of [
+    ["fallout4", "fo4", "F4SE", "Fallout4.exe"],
+    ["skyrimse", "se", "SKSE", "SkyrimSE.exe"],
+    ["skyrimvr", "vr", "SKSE", "SkyrimVR.exe"],
+  ]) {
+    const target = createRuntimeTarget({
+      game: alias, install: "C:\\Games\\Test", localAppData: "C:\\Local",
+    });
+    assert.equal(target.game, id);
+    assert.equal(target.profile.executable, executable);
+    assert.deepEqual(target.runtimeFiles, [
+      join("C:\\Games\\Test", "Data", extender, "Plugins", "devbench", "runtime.json"),
+      join("C:\\Local", "devbench", id, "runtime.json"),
+    ]);
+    const config = new SessionConfigProvider({
+      game: alias, explicit: false, localAppData: "C:\\Local",
+    });
+    assert.equal(config.configPath, join("C:\\Local", "devbench", id, "session.json"));
+  }
+  assert.throws(() => createRuntimeTarget({ game: "starfield" }), /unsupported --game starfield/);
+});
 
 test("malformed responses fail and mutation loss is never retried", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devbench-bridge-errors-"));
@@ -356,9 +414,9 @@ test("old or malformed runtime files stay safely offline", async (t) => {
   );
 });
 
-async function startBridge(runtimeFile, localAppData) {
+async function startBridge(runtimeFile, localAppData, game = "fo4") {
   const notifications = { count: 0 };
-  const args = [bridgeEntry, "--game", "fo4"];
+  const args = [bridgeEntry, "--game", game];
   if (runtimeFile) args.push("--runtime-file", runtimeFile);
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -405,8 +463,8 @@ async function startMock(options) {
     instanceId: options.instanceId,
     pid: options.pid,
     port: 0,
-    runtime: "1.11.240.0",
-    exePath: "C:\\Games\\Fallout 4\\Fallout4.exe",
+    runtime: options.runtime ?? "1.11.240.0",
+    exePath: options.exePath ?? "C:\\Games\\Fallout 4\\Fallout4.exe",
     dllPath: "C:\\Mods\\DevBench\\devbench.dll",
     headers,
     healthCalls: 0,
@@ -433,7 +491,7 @@ async function startMock(options) {
       state.healthCalls++;
       json(response, {
         ok: true,
-        exe: "Fallout4.exe",
+        exe: state.exePath.split("\\").at(-1),
         port: state.port,
         pid: state.pid,
         instanceId: state.instanceId,

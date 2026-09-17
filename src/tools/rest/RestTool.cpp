@@ -559,7 +559,7 @@ namespace dvb::tools::rest
 		ToolDescriptor descriptor;
 		descriptor.name = "wait";
 		descriptor.description =
-			"Wait through Fallout 4's real SleepWaitMenu gate, loaded SWF hour clamp, "
+			"Wait through the native sleep/wait menu gate and loaded UI hour clamp, "
 			"normal update pumping, finish path, and native autosave policy. The host "
 			"accepts up to 100000 hours, but the loaded menu decides the actual maximum. "
 			"Use action='status' after an uncertain listener timeout; never retry an "
@@ -589,7 +589,7 @@ namespace dvb::tools::rest
 		ToolDescriptor descriptor;
 		descriptor.name = "sleep";
 		descriptor.description =
-			"Sleep through Fallout 4's real SleepWaitMenu path. The host accepts up to "
+			"Sleep through the native sleep/wait menu path. The host accepts up to "
 			"100000 hours, but the loaded menu decides the actual maximum. A placed bed "
 			"reference target is required so furniture ownership, Survival/mod "
 			"rules, interruptions, side effects, and native autosave policy are preserved. "

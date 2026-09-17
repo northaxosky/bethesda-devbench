@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GameProfile.h"
+
 #include <string>
 #include <vector>
 
@@ -57,7 +59,7 @@ namespace dvb
 		bool        cleanTransition = true;
 		std::string cleanTransitionCell = "QASmoke";
 
-		// `capture` tool: where captured images are written, where the native (vanilla) fallback
+		// `capture` tool: where captured images are written, where the native fallback
 		// looks for the screenshot it just triggered, and default timeouts. captureScanDirs are
 		// relative to the game install root (GetModuleFileNameW's parent dir — vanilla screenshots
 		// and Open Shaders' own default capture path both resolve there, NOT Documents/My Games,
@@ -74,10 +76,14 @@ namespace dvb
 		int stallWatchdogMs = 5000;
 	};
 
-	// Load Data/F4SE/Plugins/devbench/config.json. If the file is missing it is
+	Config DefaultConfig(const GameProfile& a_profile);
+
+	// Load the selected profile's Data/<extender>/Plugins/devbench/config.json.
+	// If the file is missing it is
 	// auto-created with the current defaults. Invalid or unreadable config aborts startup.
-	Config LoadConfig();
+	Config LoadConfig(const GameProfile& a_profile);
 
 	// Preserve other keys; invalid config or a failed atomic replacement throws.
-	void SaveHotkeys(int a_recordKey, bool a_recordShift, int a_replayKey, bool a_replayShift);
+	void SaveHotkeys(const GameProfile& a_profile, int a_recordKey, bool a_recordShift,
+		int a_replayKey, bool a_replayShift);
 }

@@ -225,7 +225,8 @@ namespace dvb::tools
 					throw ToolError(400,
 						std::format(
 							"'{}' is a registered mod menu; use action='invoke'", name));
-				if (!IsContextFreeMenuOpenTarget(name))
+				if (!IsContextFreeMenuOpenTarget(
+						name, a_backend.contextFreeOpenMenus))
 					throw ToolError(422,
 						std::format(
 							"menu '{}' is not approved for context-free opening", name));
@@ -255,29 +256,35 @@ namespace dvb::tools
 		}
 	}
 
-	bool IsContextFreeMenuOpenTarget(std::string_view a_name)
+	bool IsContextFreeMenuOpenTarget(
+		std::string_view a_name, std::span<const std::string> a_allowlist)
 	{
-		// PauseMenu is the only currently proven Fallout 4 menu that is safely
-		// instantiated from a bare kShow message without target/context data.
-		return a_name == "PauseMenu";
+		return std::ranges::find(a_allowlist, a_name) != a_allowlist.end();
 	}
 
-	ToolDescriptor BuildMenuDescriptor()
+	ToolDescriptor BuildMenuDescriptor(const MenuBackend* a_backend)
 	{
 		const auto registered = ToolExtensions::Keys("menu");
 		const auto registeredSummary = DescribeRegisteredMenus(registered);
+		const MenuBackend fallback;
+		const auto&       backend = a_backend ? *a_backend : fallback;
+		const auto approved = backend.contextFreeOpenMenus.empty() ?
+		                          std::string("none") :
+		                          DescribeRegisteredMenus(backend.contextFreeOpenMenus);
 
 		ToolDescriptor descriptor;
 		descriptor.name = "menu";
 		descriptor.description =
-			"Inspect and control Fallout 4 menus. list returns tracked open menus and "
+			"Inspect and control " + backend.gameName +
+			" menus. list returns tracked open menus and "
 			"consumer-registered menu handlers. describe without a name snapshots the active "
 			"MessageBoxMenu, including an exact text/button fingerprint; describe with a name "
 			"returns a registered handler descriptor. accept requires both an explicit button "
 			"index and matchBody, then rechecks the complete observed fingerprint immediately "
-			"before dispatch so a changed dialog is never answered. cancelIndex is null because "
-			"Fallout 4 1.11.240 does not expose a proven cancel-button field. open is restricted "
-			"to context-free engine menus (currently PauseMenu); close hides a named non-message "
+			"before dispatch so a changed dialog is never answered. " +
+			backend.dialogLimitations +
+			". open is restricted to adapter-approved context-free engine menus (" +
+			approved + "); close hides a named non-message "
 			"menu; invoke calls an existing ToolExtensions menu handler. Mutating actions require "
 			"allowControlActions=true. Registered invoke targets: " +
 			registeredSummary + ".";
@@ -305,7 +312,7 @@ namespace dvb::tools
 
 	void MenuService::Register()
 	{
-		registry_->Register(BuildMenuDescriptor(), handler_);
+		registry_->Register(BuildMenuDescriptor(backend_.get()), handler_);
 	}
 
 	void MenuService::RefreshDescriptor()

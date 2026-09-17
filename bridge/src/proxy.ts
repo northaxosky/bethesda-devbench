@@ -1,6 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
-import { CORE_TOOLS } from "./catalog.js";
+import { coreTools } from "./catalog.js";
 import { asJsonValue, errorMessage, type JsonObject, type JsonValue } from "./json.js";
 import {
   GameUnavailableError,
@@ -57,7 +57,9 @@ export class RemoteProxy {
   async listRemoteTools(): Promise<Tool[]> {
     await this.refresh();
     if (this.identity) return this.liveTools.map((tool) => toMcpTool(tool));
-    return CORE_TOOLS.map((tool) => toMcpTool(tool, true));
+    return coreTools(this.remote.target.game).map(
+      (tool) => toMcpTool(tool, this.remote.target.profile.displayName),
+    );
   }
 
   async callTool(name: string, args: JsonObject): Promise<ProxyCallResult> {
@@ -160,11 +162,11 @@ export class RemoteProxy {
   }
 }
 
-function toMcpTool(tool: RemoteToolDescriptor, offline = false): Tool {
+function toMcpTool(tool: RemoteToolDescriptor, offlineGame?: string): Tool {
   return {
     name: tool.name,
-    description: offline
-      ? `${tool.description}\nOffline schema: this tool requires a running Fallout 4 DevBench instance.`
+    description: offlineGame
+      ? `${tool.description}\nOffline schema: this tool requires a running ${offlineGame} DevBench instance.`
       : tool.description,
     inputSchema: asJsonValue(tool.inputSchema) as Tool["inputSchema"],
     ...(tool.readOnly ? { annotations: { readOnlyHint: true } } : {}),

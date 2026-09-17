@@ -121,10 +121,10 @@ namespace dvb::tools
 			"Read game/devbench state. health is answered off the game thread and reports "
 			"identity plus queued main-thread task health. state reports lifecycle, menu, and real "
 			"player readiness. vm reports lock-protected Papyrus collection sizes and state. "
-			"player reports identity, equipment, and Fallout 4 current/base/permanent actor values. "
+			"player reports native identity, equipment, and actor values. "
 			"scene reports cell/worldspace/location/current scene, position, time, and weather. "
 			"mods reports the final full/light load order after gameDataReady. inventory reads a "
-			"player or container inventory; quests reads Fallout 4 instanced journal objectives; "
+			"player or container inventory; quests reads native journal objectives; "
 			"effects reads an actor's active-effect list; refs resolves, selects, or enumerates loaded "
 			"forms; registrants reports the existing HostApi consumer/registration ledger. extensions lists "
 			"consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.";

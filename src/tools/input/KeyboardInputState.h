@@ -8,7 +8,7 @@
 
 namespace dvb::tools::input
 {
-	// Fallout 4's PC keyboard device reports DirectInput scan codes.
+	// Bethesda's PC keyboard devices report DirectInput scan codes.
 	struct KeyboardKey
 	{
 		std::uint16_t scancode = 0;

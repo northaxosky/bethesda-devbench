@@ -5,10 +5,10 @@
 #include "RestAdapter.h"
 #include "RuntimePaths.h"
 #include "RuntimeProtocol.h"
+#include "RuntimeContext.h"
 #include "Version.h"
 #include "io/WindowsPaths.h"
 
-#include <REX/FModule.h>
 #include <httplib.h>
 #include <mcp_server.h>
 
@@ -35,24 +35,6 @@ namespace
 		return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
 	}
 
-	std::filesystem::path ModulePath(HMODULE a_module)
-	{
-		std::vector<wchar_t> buffer(512);
-		while (buffer.size() <= 32768)
-		{
-			const auto length = ::GetModuleFileNameW(a_module, buffer.data(), static_cast<DWORD>(buffer.size()));
-			if (length == 0)
-				throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), "GetModuleFileNameW");
-			if (length < buffer.size())
-			{
-				// MO2 virtualizes GetModuleFileName; the opened file handle identifies its physical backing.
-				return dvb::io::PhysicalFilePath(std::wstring(buffer.data(), length));
-			}
-			buffer.resize(buffer.size() * 2);
-		}
-		throw std::runtime_error("module path exceeds the Windows path limit");
-	}
-
 	struct ProcessIdentity
 	{
 		std::uint32_t         pid;
@@ -70,13 +52,13 @@ namespace
 				throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), "GetProcessTimes");
 			const auto pid = ::GetCurrentProcessId();
 			const auto ticks = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
-			const auto module = REX::FModule::GetCurrentModule();
+			const auto& runtime = dvb::GetRuntimeContext();
 			return ProcessIdentity{
 				pid,
 				dvb::MakeInstanceId(pid, ticks),
-				ModulePath(nullptr),
-				ModulePath(reinterpret_cast<HMODULE>(module.GetBaseAddress())),
-				REX::FModule::GetExecutingModule().GetFileVersion().string("."),
+				runtime.executablePath,
+				runtime.pluginPath,
+				runtime.runtimeVersion,
 			};
 		}();
 		return identity;
@@ -89,7 +71,8 @@ namespace
 		if (FAILED(result))
 			throw std::runtime_error(std::format("LocalAppData lookup failed: 0x{:08X}", static_cast<std::uint32_t>(result)));
 		const std::unique_ptr<wchar_t, decltype(&::CoTaskMemFree)> path(allocated, &::CoTaskMemFree);
-		return std::filesystem::path(path.get()) / L"devbench" / L"fo4";
+		return std::filesystem::path(path.get()) /
+		       dvb::CurrentGameProfile().externalStateDirectory;
 	}
 
 	void WriteDiscoveryFile(const std::filesystem::path& a_path, const dvb::json& a_value)
@@ -110,12 +93,12 @@ namespace
 		}
 		catch (const std::system_error& a_error)
 		{
-			REX::ERROR("devbench: could not publish {}: {}", Utf8Path(a_path), a_error.what());
+			logs::error("devbench: could not publish {}: {}", Utf8Path(a_path), a_error.what());
 		}
 	}
 
 	// Process-wide registry pointer so dvb::RunTool can invoke tools from an eventual in-game menu
-	// without a Server reference. Atomic: written on the F4SE thread
+	// without a Server reference. Atomic: written on the native lifecycle thread
 	// (Start/Stop), read on the render thread (RunTool). Set/cleared by Server::Start/Stop.
 	std::atomic<dvb::ToolRegistry*> g_registry{ nullptr };
 
@@ -154,14 +137,15 @@ namespace
 	{
 		auto identity = dvb::InstanceIdentity();
 		identity["port"] = a_port;
-		WriteDiscoveryFile(LR"(Data\F4SE\Plugins\devbench\runtime.json)", identity);
+		WriteDiscoveryFile(
+			dvb::CurrentGameProfile().pluginDataDirectory / "runtime.json", identity);
 		try
 		{
 			WriteDiscoveryFile(ExternalStateDirectory() / L"runtime.json", identity);
 		}
 		catch (const std::exception& a_error)
 		{
-			REX::ERROR("devbench: external runtime discovery unavailable: {}", a_error.what());
+			logs::error("devbench: external runtime discovery unavailable: {}", a_error.what());
 		}
 	}
 
@@ -169,7 +153,9 @@ namespace
 	// via its files rather than a live REST call (e.g. reading the install directory directly).
 	void WriteBridgeInfo()
 	{
-		WriteDiscoveryFile(LR"(Data\F4SE\Plugins\devbench\mcp-bridge.json)", dvb::BridgeDiscoveryInfo());
+		WriteDiscoveryFile(
+			dvb::CurrentGameProfile().pluginDataDirectory / "mcp-bridge.json",
+			dvb::BridgeDiscoveryInfo());
 	}
 }
 
@@ -236,7 +222,7 @@ namespace dvb
 			m_restAdapter->Mount(*http);
 		}
 		else
-			REX::WARN("devbench: cpp-mcp http() returned null; REST facade unavailable");
+			logs::warn("{}", "devbench: cpp-mcp http() returned null; REST facade unavailable");
 
 		// Publish the chosen port before start() spawns the listener, so a health/inspect
 		// hit racing startup reads the right port rather than 0.
@@ -248,7 +234,7 @@ namespace dvb
 			WriteRuntimeInfo(chosen);
 			WriteBridgeInfo();
 			if (chosen != m_port)
-				REX::INFO("devbench: configured port {} busy → bound {}", m_port, chosen);
+				logs::info("devbench: configured port {} busy → bound {}", m_port, chosen);
 		}
 		else
 		{
@@ -262,7 +248,7 @@ namespace dvb
 			m_mcpAdapter.reset();
 			m_mcp.reset();
 		}
-		REX::INFO("devbench: server on {}:{} — {}", m_host, chosen, ok ? "listening (mcp + rest)" : "FAILED to start");
+		logs::info("devbench: server on {}:{} — {}", m_host, chosen, ok ? "listening (mcp + rest)" : "FAILED to start");
 		return ok;
 	}
 
@@ -354,9 +340,16 @@ namespace dvb
 	json InstanceIdentity()
 	{
 		const auto& identity = Identity();
+		const auto& profile = CurrentGameProfile();
 		return json{
 			{ "pid", identity.pid },
 			{ "port", BoundPort() },
+			{ "game", profile.id },
+			{ "gameId", profile.id },
+			{ "gameName", profile.displayName },
+			{ "runtimeVariant", profile.runtimeVariant },
+			{ "vr", profile.vr },
+			{ "extender", profile.extenderName },
 			{ "exe", ExecutableName() },
 			{ "instanceId", identity.instanceId },
 			{ "exePath", Utf8Path(identity.executable) },
@@ -368,7 +361,8 @@ namespace dvb
 
 	json BridgeDiscoveryInfo()
 	{
-		const std::string game = "fo4";
+		const auto&       profile = CurrentGameProfile();
+		const std::string game = profile.id;
 		const auto        directory = Identity().plugin.parent_path() / L"devbench";
 		const auto        executable = directory / L"devbench-bridge.exe";
 		const auto        helper = directory / L"platform" / L"windows-session.ps1";
@@ -379,12 +373,12 @@ namespace dvb
 		std::error_code   ec;
 		const bool        available = std::filesystem::is_regular_file(executable, ec);
 		if (ec && ec != std::errc::no_such_file_or_directory)
-			REX::ERROR("devbench: could not inspect bridge executable: {}", ec.message());
+			logs::error("devbench: could not inspect bridge executable: {}", ec.message());
 		ec.clear();
 		const bool controllerAvailable = available && std::filesystem::is_regular_file(helper, ec) &&
 		                                 std::filesystem::is_regular_file(shim, ec) && std::filesystem::is_regular_file(launcher, ec);
 		if (ec && ec != std::errc::no_such_file_or_directory)
-			REX::ERROR("devbench: could not inspect session helper: {}", ec.message());
+			logs::error("devbench: could not inspect session helper: {}", ec.message());
 		return json{
 			{ "available", available },
 			{ "controllerAvailable", controllerAvailable },

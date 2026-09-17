@@ -617,10 +617,10 @@ namespace dvb::tools::papyrus
 		ToolDescriptor descriptor;
 		descriptor.name = "papyrus";
 		descriptor.description =
-			"Discover loaded Fallout 4 Papyrus script classes, describe actual VM function/property/"
+			"Discover loaded native Papyrus script classes, describe actual VM function/property/"
 			"struct type metadata, or dispatch one permission-gated global or bound-object call. "
 			"Arguments are validated against exact VM metadata before dispatch. Supported values are "
-			"Bool, Int, Float, String, form-backed objects, arrays, and typed Fallout 4 structs/"
+			"Bool, Int, Float, String, form-backed objects, arrays, and typed native structs/"
 			"struct arrays with recursively validated fields and explicit typed nulls. Var, unknown "
 			"fields/types, raw VM pointers, and untyped JSON inference are rejected. A call timeout "
 			"is not cancellation: an accepted latent call can complete later and is never retried.";

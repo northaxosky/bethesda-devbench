@@ -18,6 +18,15 @@ namespace dvb::tools
 	inline constexpr std::size_t  kMaxSaveFilterBytes = 200;
 	inline constexpr std::size_t  kMaxSaveDirectoryBytes = 32767;
 	inline constexpr std::int64_t kMaxSaveListLimit = 500;
+	inline constexpr double       kMaxGameAdvanceHours = 100000.0;
+
+	struct GameSavePolicy
+	{
+		std::string gameName = "Fallout 4";
+		std::string saveExtension = ".fos";
+		std::string coSaveExtension = ".f4se";
+		std::string metadataDescription = "save header metadata";
+	};
 
 	enum class GameOperationKind
 	{
@@ -134,6 +143,7 @@ namespace dvb::tools
 
 	struct GameBackend
 	{
+		GameSavePolicy                                           savePolicy;
 		std::function<GameSaveList()>                         listSaves;
 		std::function<json()>                                 status;
 		std::function<GameQueueReceipt(GameOperationRequest)> queueOperation;
@@ -147,6 +157,6 @@ namespace dvb::tools
 		std::function<GameAdvanceReceipt(double)> advanceTime;
 	};
 
-	ToolDescriptor BuildGameDescriptor();
+	ToolDescriptor BuildGameDescriptor(const GameSavePolicy& a_policy = {});
 	void           RegisterGameTool(ToolRegistry& a_registry, bool a_allowActions, GameBackend a_backend);
 }

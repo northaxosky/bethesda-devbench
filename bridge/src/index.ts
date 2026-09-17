@@ -9,6 +9,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { SessionConfigProvider } from "./config.js";
+import { GAME_PROFILES } from "./discovery/manifest.js";
 import {
   asJsonValue,
   errorMessage,
@@ -47,7 +48,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (args.command === "setup") {
     const invocation = bridgeInvocation();
     printSetupSnippet(invocation.command, invocation.scriptArgs, {
-      game: "fo4",
+      game: target.game,
       ...(args.install ? { install: args.install } : {}),
       ...(args.runtimeFile ? { runtimeFile: args.runtimeFile } : {}),
       ...(args.config ? { config: args.config } : {}),
@@ -56,6 +57,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
 
   const config = new SessionConfigProvider({
+    game: target.game,
     ...(args.config ? { configPath: args.config } : {}),
     explicit: args.config !== undefined,
   });
@@ -78,7 +80,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       if (!sessionConfig.runtimeFile) return remote;
       return new RemoteClient(
         createRuntimeTarget({
-          game: "fo4",
+          game: target.game,
           install: dirname(sessionConfig.gameExe),
           runtimeFile: sessionConfig.runtimeFile,
         }),
@@ -198,18 +200,18 @@ function isCompiledExecutable(): boolean {
 }
 
 function printHelp(): void {
-  console.log(`devbench-bridge [setup] --game fo4 [options]
+  console.log(`devbench-bridge [setup] --game <id> [options]
 
-Restart-surviving stdio MCP bridge for Fallout 4 DevBench.
+Restart-surviving stdio MCP bridge for DevBench.
 
 Options:
-  --game fo4             Required game adapter; no other games are supported.
-  --install <folder>     Constrain discovery to <folder>\\Fallout4.exe and add its runtime.json.
+  --game <id>           Supported games: ${GAME_PROFILES.map((profile) => profile.id).join(", ")}.
+  --install <folder>     Constrain discovery to the selected game's executable and runtime.json.
   --runtime-file <path>  Add an explicit runtime.json candidate.
   --config <path>        Session controller machine config. Explicit invalid files fail startup.
   --help, -h             Print this reference and exit.
 
-The default session config is %LOCALAPPDATA%\\devbench\\fo4\\session.json.
+The default session config is %LOCALAPPDATA%\\devbench\\<game-id>\\session.json.
 It is never created or edited automatically. "setup" prints only an MCP JSON snippet.`);
 }
 

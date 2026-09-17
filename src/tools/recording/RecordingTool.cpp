@@ -338,6 +338,87 @@ namespace dvb::tools::recording
 			return counts;
 		}
 
+		bool IsKeyboardTransition(const json& a_event)
+		{
+			if (a_event.value("kind", std::string{}) != "input" ||
+				a_event.value("eventType", std::string{}) != "button" ||
+				a_event.value("device", std::string{}) != "keyboard")
+				return false;
+			const auto state = a_event.value("state", std::string{});
+			const auto id = a_event.value("idCode", 0);
+			return (state == "down" || state == "up") && id > 0 && id <= 255;
+		}
+
+		std::vector<json> PrepareKeyboardReplayEvents(
+			const json& a_events, bool a_replayInputs)
+		{
+			constexpr std::int64_t kMaximumHoldMs = 60000;
+			constexpr std::int64_t kSafetyMarginMs = 2000;
+			std::vector<json>      replayable;
+			if (!a_replayInputs || !a_events.is_array())
+				return replayable;
+			for (const auto& event : a_events)
+				if (IsKeyboardTransition(event))
+					replayable.push_back(event);
+			std::ranges::stable_sort(
+				replayable, [](const json& a_left, const json& a_right) {
+					const auto leftTime =
+						a_left.value("tMs", std::int64_t{ 0 });
+					const auto rightTime =
+						a_right.value("tMs", std::int64_t{ 0 });
+					return leftTime != rightTime ?
+					           leftTime < rightTime :
+					           a_left.value("seq", std::uint64_t{ 0 }) <
+								   a_right.value("seq", std::uint64_t{ 0 });
+				});
+
+			std::map<int, std::size_t> open;
+			for (std::size_t index = 0; index < replayable.size(); ++index)
+			{
+				const auto key = replayable[index].value("idCode", 0);
+				const auto state =
+					replayable[index].value("state", std::string{});
+				if (state == "down")
+					open[key] = index;
+				else if (const auto it = open.find(key); it != open.end())
+				{
+					const auto hold = replayable[index].value(
+										  "tMs", std::int64_t{ 0 }) -
+					                  replayable[it->second].value(
+										  "tMs", std::int64_t{ 0 });
+					if (hold < 0 || hold + kSafetyMarginMs > kMaximumHoldMs)
+						throw ToolError(
+							400,
+							std::format(
+								"recorded keyboard hold for key {} exceeds the faithful replay limit",
+								key));
+					replayable[it->second]["replayMaxHoldMs"] =
+						std::max<std::int64_t>(100, hold + kSafetyMarginMs);
+					open.erase(it);
+				}
+			}
+			return replayable;
+		}
+
+		json KeyboardReplayStep(
+			const json& a_event, std::string_view a_owner)
+		{
+			json args{
+				{ "action", a_event.value("state", std::string{}) },
+				{ "device", "keyboard" },
+				{ "key", a_event.value("idCode", 0) },
+				{ "owner", a_owner },
+			};
+			if (args["action"] == "down")
+				args["maxHoldMs"] =
+					a_event.value("replayMaxHoldMs", 60000);
+			return json{
+				{ "tool", "input" },
+				{ "args", std::move(args) },
+				{ "label", "recorded keyboard input" },
+			};
+		}
+
 		std::size_t ProjectedReplayUnits(
 			std::size_t a_samples, std::size_t a_activity,
 			std::size_t a_checkpoints)
@@ -389,14 +470,19 @@ namespace dvb::tools::recording
 
 		std::string ResolveSaveForReplay(
 			ToolRegistry& a_registry, const ToolContext& a_context,
-			std::string_view a_recordedName, bool a_rolling)
+			std::string_view a_recordedName, bool a_rolling,
+			std::string_view a_gameName)
 		{
 			const auto listing = ReadGameSaves(a_registry, a_context);
 			const auto saves = listing.value("saves", json::array());
 			if (a_rolling)
 			{
 				if (saves.empty() || !saves.front().is_object())
-					throw ToolError(404, "no Fallout 4 save is available for rolling-slot restoration");
+					throw ToolError(
+						404,
+						std::format(
+							"no {} save is available for rolling-slot restoration",
+							a_gameName));
 				return saves.front().value("name", std::string{});
 			}
 			for (const auto& save : saves)
@@ -520,6 +606,7 @@ namespace dvb::tools::recording
 		std::string             correlationId;
 		json                    manifest;
 		std::vector<json>       samples;
+		std::vector<json>       trackingSamples;
 		std::vector<json>       activity;
 		std::vector<json>       checkpoints;
 		std::string             lastSceneKey;
@@ -559,6 +646,21 @@ namespace dvb::tools::recording
 			Shutdown();
 		}
 
+		RecordingCompatibility Compatibility() const
+		{
+			return {
+				.gameIds = backend.compatibleGameIds,
+				.runtimeVariants = backend.compatibleRuntimeVariants,
+				.supportsVR = backend.recordedOnVR,
+			};
+		}
+
+		ParsedRecording Parse(json a_document, bool a_force = false) const
+		{
+			return ParseRecording(
+				std::move(a_document), Compatibility(), a_force);
+		}
+
 		void Subscribe()
 		{
 			std::weak_ptr<State> weak = shared_from_this();
@@ -579,7 +681,7 @@ namespace dvb::tools::recording
 				registered = true;
 			}
 			const bool recordAdded = registry.Register(
-				BuildRecordDescriptor(),
+				BuildRecordDescriptor(std::addressof(backend)),
 				[weak = weak_from_this()](
 					const json& a_args, const ToolContext& a_context) {
 					const auto state = weak.lock();
@@ -693,6 +795,8 @@ namespace dvb::tools::recording
 				kind = "lifecycle";
 			else if (a_event.topic == "menu")
 				kind = "menu";
+			else if (a_event.topic == "input.activity")
+				kind = "input";
 			else
 				return;
 			if (ProjectedReplayUnits(
@@ -768,6 +872,7 @@ namespace dvb::tools::recording
 			{
 				const std::lock_guard lock{ mutex };
 				samples.clear();
+				trackingSamples.clear();
 				activity.clear();
 				checkpoints.clear();
 				limitReached = false;
@@ -778,11 +883,11 @@ namespace dvb::tools::recording
 				started = Clock::now();
 				lastSceneKey = SceneKey(initial);
 				manifest = initial.value("scene", json::object());
-				manifest["game"] = "fo4";
+				manifest["game"] = backend.gameId;
 				manifest["format"] = kRecordingFormat;
 				manifest["runtime"] = json{
-					{ "recordedOnVR", false },
-					{ "compat", json::array({ "ae" }) },
+					{ "recordedOnVR", backend.recordedOnVR },
+					{ "compat", backend.compatibleRuntimeVariants },
 				};
 				manifest["startState"] =
 					initial.value("playerLoaded", false) ?
@@ -834,7 +939,7 @@ namespace dvb::tools::recording
 						{ "pose", true },
 						{ "console", true },
 						{ "lifecycle", true },
-						{ "vrTracking", false },
+						{ "vrTracking", static_cast<bool>(backend.trackingSnapshot) },
 					} },
 			};
 		}
@@ -881,6 +986,18 @@ namespace dvb::tools::recording
 				const auto now = Clock::now();
 				const auto elapsed =
 					std::chrono::duration_cast<Milliseconds>(now - started).count();
+				json tracking;
+				if (backend.trackingSnapshot)
+				{
+					try
+					{
+						tracking = backend.trackingSnapshot();
+					}
+					catch (...)
+					{
+						tracking = nullptr;
+					}
+				}
 				const std::lock_guard lock{ mutex };
 				if (phase != RecorderPhase::kRecording ||
 					generation != a_generation || replaying)
@@ -924,6 +1041,12 @@ namespace dvb::tools::recording
 					{ "frame", snapshot.value("frame", -1) },
 					{ "tMs", elapsed },
 				});
+				if (tracking.is_object() &&
+					trackingSamples.size() < kMaximumTrajectorySamples)
+				{
+					tracking["tMs"] = elapsed;
+					trackingSamples.push_back(std::move(tracking));
+				}
 			}
 		}
 
@@ -1006,6 +1129,7 @@ namespace dvb::tools::recording
 
 			json              document;
 			std::vector<json> localSamples;
+			std::vector<json> localTrackingSamples;
 			std::vector<json> localActivity;
 			std::vector<json> localCheckpoints;
 			std::int64_t      recordedMs = 0;
@@ -1017,6 +1141,7 @@ namespace dvb::tools::recording
 					Clock::now() - started)
 				                 .count();
 				localSamples = samples;
+				localTrackingSamples = trackingSamples;
 				localActivity = activity;
 				localCheckpoints = checkpoints;
 				reached = limitReached;
@@ -1033,15 +1158,18 @@ namespace dvb::tools::recording
 					{ "version", json{ { "major", 3 }, { "minor", 0 } } },
 					{ "player",
 						json::array({ "position", "yaw", "pitch" }) },
-					{ "vrTracking", false },
+					{ "vrTracking", static_cast<bool>(backend.trackingSnapshot) },
 				};
-				manifest["activityCapture"] = json{
-					{ "console", true },
-					{ "lifecycle", true },
-					{ "menu", true },
-					{ "cell", true },
-					{ "input", false },
-				};
+				manifest["activityCapture"] = backend.activityCaptureContract ?
+				                                  backend.activityCaptureContract() :
+				                                  json{
+													  { "console", true },
+													  { "lifecycle", true },
+													  { "menu", true },
+													  { "cell", true },
+													  { "input", false },
+												  };
+				manifest["trackingSampleCount"] = localTrackingSamples.size();
 				if (!localCheckpoints.empty())
 				{
 					manifest["checkpoints"] = localCheckpoints;
@@ -1055,6 +1183,7 @@ namespace dvb::tools::recording
 				document = json{
 					{ "meta", manifest },
 					{ "samples", localSamples },
+					{ "trackingSamples", localTrackingSamples },
 					{ "activityEvents", localActivity },
 					{ "steps", BuildRecordedSteps(localSamples) },
 				};
@@ -1063,7 +1192,7 @@ namespace dvb::tools::recording
 			std::string file;
 			try
 			{
-				(void)ParseRecording(document);
+				(void)Parse(document);
 				file = store.WriteUnique(document);
 			}
 			catch (...)
@@ -1107,6 +1236,7 @@ namespace dvb::tools::recording
 				{ "replaying", replaying },
 				{ "correlationId", correlationId },
 				{ "sampleCount", samples.size() },
+				{ "trackingSampleCount", trackingSamples.size() },
 				{ "checkpointCount", checkpoints.size() },
 				{ "activityCounts", ActivityCounts(activity) },
 				{ "intervalMs", interval.count() },
@@ -1142,6 +1272,9 @@ namespace dvb::tools::recording
 			const bool  restoreScene = ReadBool(a_args, "restoreScene", false);
 			const bool  captureCheckpoints =
 				ReadBool(a_args, "captureCheckpoints", true);
+			const bool replayInputs = ReadBool(a_args, "replayInputs", true);
+			const std::string inputOwner =
+				"recording:" + std::filesystem::path(a_file).stem().string();
 			const bool hasCheckpoints =
 				meta.contains("checkpoints") &&
 				meta.at("checkpoints").is_array() &&
@@ -1208,7 +1341,8 @@ namespace dvb::tools::recording
 				{
 					const bool rolling = IsRollingSave(entryValue);
 					const auto resolved = ResolveSaveForReplay(
-						registry, a_context, entryValue, rolling);
+						registry, a_context, entryValue, rolling,
+						backend.gameName);
 					steps.push_back(json{
 						{ "tool", "game" },
 						{ "args",
@@ -1322,9 +1456,12 @@ namespace dvb::tools::recording
 			}
 
 			json unsupported = json::array();
+			const auto activityEvents =
+				document.value("activityEvents", json::array());
+			const auto keyboardEvents =
+				PrepareKeyboardReplayEvents(activityEvents, replayInputs);
 			std::map<std::string, std::int64_t> recentGameActions;
-			for (const auto& event :
-				document.value("activityEvents", json::array()))
+			for (const auto& event : activityEvents)
 			{
 				const auto at = EventTime(event);
 				if (!at)
@@ -1440,8 +1577,53 @@ namespace dvb::tools::recording
 						PlayerReadyStep(),
 					});
 				}
+				else if (kind == "input")
+				{
+					// Keyboard transitions are inserted below after hold validation.
+					// VR/controller activity is consumed by buildTrackedInputReplay.
+					continue;
+				}
 				else if (kind != "menu")
 					unsupported.push_back(event);
+			}
+			for (const auto& event : keyboardEvents)
+				if (const auto at = EventTime(event))
+					timeline.push_back({
+						*at,
+						order++,
+						KeyboardReplayStep(event, inputOwner),
+					});
+
+			json trackedPlan{
+				{ "step", nullptr },
+				{ "report", json{ { "enabled", false } } },
+				{ "inputOwner", "" },
+				{ "durationMs", 0 },
+			};
+			if (backend.buildTrackedInputReplay)
+			{
+				try
+				{
+					trackedPlan = backend.buildTrackedInputReplay(
+						document.value("trackingSamples", json::array()),
+						activityEvents, inputOwner, replayInputs);
+				}
+				catch (const ToolError&)
+				{
+					throw;
+				}
+				catch (const std::exception& a_error)
+				{
+					throw ToolError(
+						400,
+						std::format(
+							"invalid recording tracked-input data: {}",
+							a_error.what()));
+				}
+				if (!trackedPlan.is_object())
+					throw ToolError(
+						500,
+						"tracked input replay planner returned a non-object result");
 			}
 
 			json captureCapability = CaptureCapability(meta);
@@ -1489,9 +1671,13 @@ namespace dvb::tools::recording
 				timeline, [](const TimedStep& a_left, const TimedStep& a_right) {
 					return a_left.atMs < a_right.atMs;
 				});
+			if (!trackedPlan.value("step", json(nullptr)).is_null())
+				steps.push_back(trackedPlan.at("step"));
 			for (std::size_t index = 0; index < timeline.size(); ++index)
 			{
 				auto& item = timeline[index];
+				if (index == 0 && item.atMs > 0)
+					steps.push_back(json{ { "wait", item.atMs } });
 				if (item.step.contains("beforeWaitMs"))
 				{
 					const auto wait = item.step.at("beforeWaitMs");
@@ -1517,6 +1703,14 @@ namespace dvb::tools::recording
 							steps.push_back(json{ { "wait", wait } });
 					}
 				}
+				const auto timelineEnd =
+					timeline.empty() ? std::int64_t{ 0 } : timeline.back().atMs;
+				const auto trackedDuration =
+					trackedPlan.value("durationMs", std::int64_t{ 0 });
+				if (trackedDuration > timelineEnd)
+					steps.push_back(json{
+						{ "wait", trackedDuration - timelineEnd },
+					});
 			}
 
 			if (steps.size() > kMaximumTrajectorySamples)
@@ -1537,6 +1731,14 @@ namespace dvb::tools::recording
 					} },
 				{ "activity",
 					json{
+						{ "replayInputs", replayInputs },
+						{ "keyboardTransitions", keyboardEvents.size() },
+						{ "vrTrackedSet",
+							trackedPlan.value("report", json::object()) },
+						{ "inputOwner",
+							keyboardEvents.empty() ?
+								trackedPlan.value("inputOwner", std::string{}) :
+								inputOwner },
 						{ "unsupported", std::move(unsupported) },
 						{ "feedbackSuppressed", true },
 					} },
@@ -1550,7 +1752,7 @@ namespace dvb::tools::recording
 				a_args,
 				{ "action", "file", "path", "restoreScene", "settleMs",
 					"captureCheckpoints", "variant", "goldens", "coupling",
-					"force", "async", "repeat", "continueOnError" },
+					"replayInputs", "force", "async", "repeat", "continueOnError" },
 				"record replay");
 			auto file = ReadString(a_args, "file");
 			if (file.empty())
@@ -1574,7 +1776,7 @@ namespace dvb::tools::recording
 					throw ToolError(404, "no recording is available to replay");
 			}
 			const bool force = ReadBool(a_args, "force", false);
-			const auto parsed = ParseRecording(store.Load(file), force);
+			const auto parsed = Parse(store.Load(file), force);
 			const auto plan =
 				BuildReplayPlan(parsed, a_args, a_context, file);
 
@@ -1800,8 +2002,7 @@ namespace dvb::tools::recording
 				ValidateOnly(
 					a_args, { "action", "file", "force" }, "recordings describe");
 				const auto parsed =
-					ParseRecording(
-						store.Load(file), ReadBool(a_args, "force", false));
+					Parse(store.Load(file), ReadBool(a_args, "force", false));
 				return json{
 					{ "file", file },
 					{ "meta",
@@ -1819,7 +2020,7 @@ namespace dvb::tools::recording
 					{ "action", "file", "value", "force" },
 					"recordings validate");
 				const auto value = ReadBool(a_args, "value", true);
-				auto parsed = ParseRecording(
+				auto parsed = Parse(
 					store.Load(file), ReadBool(a_args, "force", false));
 				parsed.document["meta"]["validated"] = value;
 				store.Replace(file, parsed.document);
@@ -1868,16 +2069,19 @@ namespace dvb::tools::recording
 		};
 	}
 
-	ToolDescriptor BuildRecordDescriptor()
+	ToolDescriptor BuildRecordDescriptor(const RecordingBackend* a_backend)
 	{
+		const RecordingBackend fallback;
+		const auto&             backend = a_backend ? *a_backend : fallback;
 		ToolDescriptor descriptor;
 		descriptor.name = "record";
 		descriptor.description =
-			"Capture bounded Fallout 4 pose, console, lifecycle, menu, and cell activity into "
+			"Capture bounded " + backend.gameName +
+			" pose, console, lifecycle, menu, cell, and adapter-provided input activity into "
 			"devbench-recording-3, mark checkpoints by id, and replay through the shared scenario "
 			"worker/history. Replays preserve named-save identity, resolve rolling saves exactly "
 			"once, use typed CELL/WRLD transitions where available, suppress feedback recording, "
-			"and never claim VR tracking. validate is provided by the recordings tool and marks "
+			"and advertise VR tracking only when the native adapter provides it. validate is provided by the recordings tool and marks "
 			"metadata only.";
 		descriptor.inputSchema = json{
 			{ "type", "object" },
@@ -1898,6 +2102,7 @@ namespace dvb::tools::recording
 				{ "path", json{ { "type", "string" }, { "description", "legacy alias for a bare filename confined to the recordings root" } } },
 				{ "restoreScene", json{ { "type", "boolean" }, { "default", false } } },
 				{ "captureCheckpoints", json{ { "type", "boolean" }, { "default", true } } },
+				{ "replayInputs", json{ { "type", "boolean" }, { "default", true } } },
 				{ "variant", json{ { "type", "string" }, { "default", "default" } } },
 				{ "goldens", json{ { "type", "object" } } },
 				{ "coupling", json{ { "type", "string" }, { "enum", json::array({ "anchored", "cell", "worldspace" }) } } },

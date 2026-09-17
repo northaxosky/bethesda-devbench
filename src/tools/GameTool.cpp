@@ -2,7 +2,6 @@
 
 #include "ToolExtensions.h"
 #include "ToolPermissions.h"
-#include "tools/game/Fallout4Calendar.h"
 
 #include <algorithm>
 #include <array>
@@ -21,23 +20,53 @@ namespace dvb::tools
 			return a_value;
 		}
 
-		std::string ComparableSaveName(std::string_view a_name)
+		bool EndsWithAsciiCaseInsensitive(
+			std::string_view a_value, std::string_view a_suffix)
+		{
+			if (a_suffix.empty() || a_value.size() < a_suffix.size())
+				return false;
+			return LowerAscii(
+				std::string(a_value.substr(a_value.size() - a_suffix.size()))) ==
+			       LowerAscii(std::string(a_suffix));
+		}
+
+		std::string ComparableSaveName(
+			std::string_view a_name, const GameSavePolicy& a_policy)
 		{
 			const auto separator = a_name.find_last_of("/\\");
 			if (separator != std::string_view::npos)
 				a_name.remove_prefix(separator + 1);
-			if (a_name.size() >= 4)
-			{
-				const auto suffix = LowerAscii(std::string(a_name.substr(a_name.size() - 4)));
-				if (suffix == ".fos")
-					a_name.remove_suffix(4);
-			}
+			if (EndsWithAsciiCaseInsensitive(a_name, a_policy.saveExtension))
+				a_name.remove_suffix(a_policy.saveExtension.size());
 			return LowerAscii(std::string(a_name));
 		}
 
-		bool SameSaveName(std::string_view a_left, std::string_view a_right)
+		bool SameSaveName(
+			std::string_view a_left, std::string_view a_right,
+			const GameSavePolicy& a_policy)
 		{
-			return ComparableSaveName(a_left) == ComparableSaveName(a_right);
+			return ComparableSaveName(a_left, a_policy) ==
+			       ComparableSaveName(a_right, a_policy);
+		}
+
+		bool SameOperationSaveName(
+			std::string_view a_left, std::string_view a_right)
+		{
+			auto canonical = [](std::string_view a_value) {
+				const auto separator = a_value.find_last_of("/\\");
+				if (separator != std::string_view::npos)
+					a_value.remove_prefix(separator + 1);
+				std::string out = LowerAscii(std::string(a_value));
+				for (const std::string_view extension :
+					{ ".fos", ".f4se", ".ess", ".skse" })
+					if (out.ends_with(extension))
+					{
+						out.resize(out.size() - extension.size());
+						break;
+					}
+				return out;
+			};
+			return canonical(a_left) == canonical(a_right);
 		}
 
 		void RequireObject(const json& a_args)
@@ -98,7 +127,8 @@ namespace dvb::tools
 			}
 		}
 
-		std::string ValidateSaveName(const json& a_args)
+		std::string ValidateSaveName(
+			const json& a_args, const GameSavePolicy& a_policy)
 		{
 			const auto name = ReadString(a_args, "name", true);
 			if (name.empty())
@@ -119,7 +149,8 @@ namespace dvb::tools
 			}
 
 			const auto lower = LowerAscii(name);
-			if (lower.ends_with(".fos") || lower.ends_with(".f4se"))
+			if (EndsWithAsciiCaseInsensitive(lower, a_policy.saveExtension) ||
+				EndsWithAsciiCaseInsensitive(lower, a_policy.coSaveExtension))
 				throw ToolError(400, "'name' must be a basename without a file extension");
 
 			const auto dot = lower.find('.');
@@ -261,7 +292,9 @@ namespace dvb::tools
 				{
 					if (!a_backend.readSaveMetadata)
 					{
-						save.metadataError = "Fallout 4 save metadata parsing is unavailable";
+						save.metadataError =
+							a_backend.savePolicy.gameName +
+							" save metadata parsing is unavailable";
 						continue;
 					}
 					auto parsed = a_backend.readSaveMetadata(list.directory, save.name);
@@ -273,7 +306,8 @@ namespace dvb::tools
 					else
 					{
 						save.metadataError = parsed.error.empty() ?
-						                         "Fallout 4 save metadata could not be read" :
+						                         a_backend.savePolicy.gameName +
+													 " save metadata could not be read" :
 						                         std::move(parsed.error);
 					}
 				}
@@ -289,7 +323,11 @@ namespace dvb::tools
 				{ "returned", values.size() },
 				{ "truncated", matched > values.size() },
 				{ "saves", std::move(values) },
-				{ "note", "Fallout 4 .fos saves sorted newest-first; names are extensionless basenames." },
+				{ "note",
+					std::format(
+						"{} {} saves sorted newest-first; names are extensionless basenames.",
+						a_backend.savePolicy.gameName,
+						a_backend.savePolicy.saveExtension) },
 			};
 			if (detail)
 			{
@@ -299,7 +337,9 @@ namespace dvb::tools
 				else if (saves.empty())
 					out["metaNote"] = "no saves matched 'filter'/'limit' -- nothing to read";
 				else
-					out["metaNote"] = "none of the returned saves' .fos headers could be read; see per-save metaError";
+					out["metaNote"] = std::format(
+						"none of the returned saves' {} headers could be read; see per-save metaError",
+						a_backend.savePolicy.saveExtension);
 			}
 			return out;
 		}
@@ -339,10 +379,10 @@ namespace dvb::tools
 			const auto hours = it->get<double>();
 			if (!std::isfinite(hours) || hours == 0.0)
 				throw ToolError(400, "'hours' must be finite and non-zero");
-			if (std::abs(hours) > game::kMaxCalendarAdvanceHours)
+			if (std::abs(hours) > kMaxGameAdvanceHours)
 				throw ToolError(400, std::format(
 										 "'hours' must be within +/-{}",
-										 game::kMaxCalendarAdvanceHours));
+										 kMaxGameAdvanceHours));
 			if (!a_backend.advanceTime)
 				throw ToolError(503, "calendar advancement is unavailable");
 
@@ -417,19 +457,21 @@ namespace dvb::tools
 					ResolveMutationDirectory(a_backend, requestedDirectory);
 				auto list = ReadSortedSaves(a_backend, directory);
 				if (list.saves.empty())
-					throw ToolError(404, "no Fallout 4 saves are available to load");
+					throw ToolError(
+						404, "no " + a_backend.savePolicy.gameName +
+						         " saves are available to load");
 				return Queue(
 					a_backend, GameOperationKind::kLoad, list.saves.front().name, directory);
 			}
 
 			ValidateOnly(a_args, { "action", "name", "dir" });
-			auto       name = ValidateSaveName(a_args);
+			auto       name = ValidateSaveName(a_args, a_backend.savePolicy);
 			const auto requestedDirectory = ReadDirectory(a_args);
 			const auto directory =
 				ResolveMutationDirectory(a_backend, requestedDirectory);
 			auto       list = ReadSortedSaves(a_backend, directory);
 			const auto existing = std::ranges::find_if(list.saves, [&](const GameSaveInfo& a_save) {
-				return SameSaveName(a_save.name, name);
+				return SameSaveName(a_save.name, name, a_backend.savePolicy);
 			});
 			if (action == "save")
 			{
@@ -584,7 +626,7 @@ namespace dvb::tools
 			return false;
 		if (operation_->phase == GameOperationPhase::kReserved)
 			return false;
-		if (a_name && !SameSaveName(operation_->name, *a_name))
+		if (a_name && !SameOperationSaveName(operation_->name, *a_name))
 			return false;
 		operation_->phase = GameOperationPhase::kStarted;
 		operation_->startedCursor = a_eventCursor;
@@ -604,7 +646,7 @@ namespace dvb::tools
 			return false;
 		if (operation_->phase == GameOperationPhase::kReserved)
 			return false;
-		if (a_name && !SameSaveName(operation_->name, *a_name))
+		if (a_name && !SameOperationSaveName(operation_->name, *a_name))
 			return false;
 		if (!a_name && operation_->phase != GameOperationPhase::kStarted)
 			return false;
@@ -635,13 +677,16 @@ namespace dvb::tools
 		operation_.reset();
 	}
 
-	ToolDescriptor BuildGameDescriptor()
+	ToolDescriptor BuildGameDescriptor(const GameSavePolicy& a_policy)
 	{
 		ToolDescriptor descriptor;
 		descriptor.name = "game";
 		descriptor.description =
-			"Inspect save/load status, list Fallout 4 .fos saves with optional bounded header metadata, "
-			"queue a native save/load, or directly advance the Fallout 4 calendar. "
+			std::format(
+				"Inspect save/load status, list {} {} saves with optional bounded {}, "
+				"queue a native save/load, or advance the native game calendar. ",
+				a_policy.gameName, a_policy.saveExtension,
+				a_policy.metadataDescription) +
 			"Mutations require allowGameActions=true, serialize one in-flight operation, never overwrite "
 			"an existing save, and return an actionCursor captured before native dispatch for lifecycle correlation. "
 			"An explicit dir is read-only selection and must resolve to the native save directory for mutations. "
@@ -650,12 +695,12 @@ namespace dvb::tools
 			{ "type", "object" },
 			{ "properties", json{
 								{ "action", json{ { "type", "string" }, { "enum", json::array({ "status", "list", "save", "load", "loadLast", "advanceTime" }) }, { "default", "status" } } },
-								{ "name", json{ { "type", "string" }, { "minLength", 1 }, { "maxLength", kMaxSaveNameBytes }, { "description", "save/load: extensionless Fallout 4 save basename" } } },
+								{ "name", json{ { "type", "string" }, { "minLength", 1 }, { "maxLength", kMaxSaveNameBytes }, { "description", "save/load: extensionless " + a_policy.gameName + " save basename" } } },
 								{ "filter", json{ { "type", "string" }, { "maxLength", kMaxSaveFilterBytes }, { "description", "list: case-insensitive basename substring" } } },
 								{ "limit", json{ { "type", "integer" }, { "minimum", 1 }, { "maximum", kMaxSaveListLimit }, { "default", 100 } } },
-								{ "detail", json{ { "type", "boolean" }, { "default", false }, { "description", "list: parse bounded metadata from each returned .fos header" } } },
+								{ "detail", json{ { "type", "boolean" }, { "default", false }, { "description", "list: parse bounded metadata from each returned " + a_policy.saveExtension + " header" } } },
 								{ "dir", json{ { "type", "string" }, { "maxLength", kMaxSaveDirectoryBytes }, { "description", "list: read an explicit save directory; mutations may only name the native effective directory" } } },
-								{ "hours", json{ { "type", "number" }, { "minimum", -game::kMaxCalendarAdvanceHours }, { "maximum", game::kMaxCalendarAdvanceHours }, { "description", "advanceTime: finite non-zero signed game hours" } } },
+								{ "hours", json{ { "type", "number" }, { "minimum", -kMaxGameAdvanceHours }, { "maximum", kMaxGameAdvanceHours }, { "description", "advanceTime: finite non-zero signed game hours" } } },
 							} },
 			{ "additionalProperties", false },
 		};
@@ -665,13 +710,13 @@ namespace dvb::tools
 	void RegisterGameTool(ToolRegistry& a_registry, bool a_allowActions, GameBackend a_backend)
 	{
 		auto sharedBackend = std::make_shared<GameBackend>(std::move(a_backend));
-		a_registry.Register(BuildGameDescriptor(),
+		a_registry.Register(BuildGameDescriptor(sharedBackend->savePolicy),
 			[a_allowActions, sharedBackend](const json& a_args, const ToolContext&) {
 				return HandleGame(a_args, a_allowActions, *sharedBackend);
 			});
 		ToolExtensions::Register("inspect", "saveLoad",
 			json{
-				{ "description", "Read Fallout 4 save/load readiness and the latest correlated operation." },
+				{ "description", "Read native save/load readiness and the latest correlated operation." },
 				{ "readOnly", true },
 			},
 			[a_allowActions, sharedBackend](const json& a_args, const ToolContext&) {
@@ -681,7 +726,10 @@ namespace dvb::tools
 			});
 		ToolExtensions::Register("inspect", "saves",
 			json{
-				{ "description", "List Fallout 4 .fos saves with optional filter, limit, detail, and read-only directory selection." },
+				{ "description",
+					"List " + sharedBackend->savePolicy.gameName + " " +
+						sharedBackend->savePolicy.saveExtension +
+						" saves with optional filter, limit, detail, and read-only directory selection." },
 				{ "readOnly", true },
 			},
 			[sharedBackend](const json& a_args, const ToolContext&) {

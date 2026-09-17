@@ -2,6 +2,7 @@ import { access, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join, resolve, win32 } from "node:path";
 
+import { resolveGameProfile, type GameProfile } from "./discovery/manifest.js";
 import {
   errorMessage,
   isObject,
@@ -33,6 +34,7 @@ export interface SessionConfig {
 }
 
 export interface SessionConfigProviderOptions {
+  game?: string;
   configPath?: string;
   explicit: boolean;
   localAppData?: string;
@@ -42,13 +44,15 @@ export class SessionConfigProvider {
   readonly configPath: string;
   readonly explicit: boolean;
   private cached?: SessionConfig;
+  private readonly profile: GameProfile;
 
   constructor(options: SessionConfigProviderOptions) {
+    this.profile = resolveGameProfile(options.game ?? "fo4");
     const localAppData = options.localAppData ?? process.env.LOCALAPPDATA;
     this.configPath = options.configPath
       ? resolve(options.configPath)
       : localAppData
-        ? resolve(localAppData, "devbench", "fo4", "session.json")
+        ? resolve(localAppData, "devbench", this.profile.id, "session.json")
         : resolve("session.json");
     this.explicit = options.explicit;
   }
@@ -77,7 +81,7 @@ export class SessionConfigProvider {
         { cause: error },
       );
     }
-    this.cached = parseSessionConfig(value, this.configPath);
+    this.cached = parseSessionConfig(value, this.configPath, this.profile.id);
     return this.cached;
   }
 
@@ -93,7 +97,9 @@ export class SessionConfigProvider {
 export function parseSessionConfig(
   value: unknown,
   sourcePath: string,
+  game = "fo4",
 ): SessionConfig {
+  const profile = resolveGameProfile(game);
   const object = requireObject(value, "session config");
   const config: SessionConfig = {
     sourcePath,
@@ -107,6 +113,9 @@ export function parseSessionConfig(
     resultsDir: absoluteWindowsPath(object, "resultsDir"),
     logs: parseLogs(object.logs),
   };
+  if (win32.basename(config.gameExe).toLowerCase() !== profile.executable.toLowerCase()) {
+    throw new Error(`session config.gameExe must identify ${profile.executable} for --game ${profile.id}`);
+  }
   const runtimeFile = optionalString(object, "runtimeFile", "session config");
   const expectedRuntime = optionalString(
     object,
@@ -133,7 +142,7 @@ export function parseSessionConfig(
 
 export async function validateLaunchInputs(config: SessionConfig): Promise<void> {
   await requireFile(config.mo2Exe, "Mod Organizer executable");
-  await requireFile(config.gameExe, "Fallout4 executable");
+  await requireFile(config.gameExe, "game executable");
   await requireFile(config.devbenchDll, "deployed DevBench DLL");
   const profileDir = join(config.profilesDir, config.profile);
   let profileStat;

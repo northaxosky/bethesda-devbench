@@ -130,7 +130,7 @@ TEST_CASE("papyrus descriptor documents Fallout 4 typed calls and stable actions
 	const auto descriptor = BuildPapyrusDescriptor();
 	CHECK(descriptor.name == "papyrus");
 	CHECK(!descriptor.readOnly);
-	CHECK(descriptor.description.find("typed Fallout 4 structs") != std::string::npos);
+	CHECK(descriptor.description.find("typed native structs") != std::string::npos);
 	CHECK(descriptor.description.find("timeout is not cancellation") != std::string::npos);
 	CHECK(descriptor.inputSchema.at("properties").at("action").at("enum") ==
 		  json::array({ "list", "describe", "call" }));

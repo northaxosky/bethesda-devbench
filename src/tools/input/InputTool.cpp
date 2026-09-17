@@ -146,7 +146,7 @@ namespace dvb::tools::input
 		[[noreturn]] void ThrowDispatchError(const DispatchResult& a_result)
 		{
 			const auto message = a_result.message.empty() ?
-			                         std::format("Fallout 4 keyboard dispatch failed ({})", StatusName(a_result.status)) :
+			                         std::format("native keyboard dispatch failed ({})", StatusName(a_result.status)) :
 			                         a_result.message;
 			switch (a_result.status)
 			{
@@ -206,7 +206,7 @@ namespace dvb::tools::input
 
 		EventBus*                                      events;
 		const bool                                     allowControlActions;
-		KeyboardBackend                                backend;
+		InputBackend                                   backend;
 		std::atomic<bool>                              ready{ false };
 		std::mutex                                     mutex;
 		std::condition_variable                        cv;
@@ -219,11 +219,14 @@ namespace dvb::tools::input
 		bool                                           workerStop = false;
 		bool                                           shutdownStarted = false;
 
-		State(EventBus& a_events, bool a_allowControlActions, KeyboardBackend a_backend) :
+		State(EventBus& a_events, bool a_allowControlActions, InputBackend a_backend) :
 			events(std::addressof(a_events)),
 			allowControlActions(a_allowControlActions),
 			backend(std::move(a_backend))
-		{}
+		{
+			if (backend.attachActivity)
+				backend.attachActivity(a_events);
+		}
 
 		void Start()
 		{
@@ -235,11 +238,11 @@ namespace dvb::tools::input
 		{
 			if (!backend.available)
 				throw ToolError(503,
-					"Fallout 4 keyboard injection is unavailable for this runtime; only AE 1.11.240 "
-					"is supported");
+					backend.gameName + " keyboard injection is unavailable for this runtime");
 			if (!ready.load(std::memory_order_acquire))
 				throw ToolError(503,
-					"keyboard input is not ready; F4SE kInputLoaded has not completed");
+					"keyboard input is not ready; " + backend.extenderName +
+						" input initialization has not completed");
 			const std::lock_guard lock{ mutex };
 			if (!accepting)
 				throw ToolError(503, "keyboard input service is shutting down");
@@ -283,7 +286,7 @@ namespace dvb::tools::input
 			{
 				DispatchResult result{
 					DispatchStatus::kUnavailable, -1, false,
-					"Fallout 4 keyboard dispatcher is unavailable"
+					backend.gameName + " keyboard dispatcher is unavailable"
 				};
 				if (a_command.complete)
 					a_command.complete(result);
@@ -310,7 +313,9 @@ namespace dvb::tools::input
 			{
 				DispatchResult result{
 					DispatchStatus::kFailed, -1, false,
-					std::format("Fallout 4 keyboard dispatcher threw: {}", a_exception.what())
+					std::format(
+						"{} keyboard dispatcher threw: {}", backend.gameName,
+						a_exception.what())
 				};
 				notify(result);
 				return { false, result };
@@ -319,7 +324,7 @@ namespace dvb::tools::input
 			{
 				DispatchResult result{
 					DispatchStatus::kFailed, -1, false,
-					"Fallout 4 keyboard dispatcher threw an unknown exception"
+					backend.gameName + " keyboard dispatcher threw an unknown exception"
 				};
 				notify(result);
 				return { false, result };
@@ -506,7 +511,7 @@ namespace dvb::tools::input
 			json keys = json::array();
 			for (const auto& key : KeyboardKeyCatalog())
 				keys.push_back(KeyJson(key));
-			return json{
+			json capabilities{
 				{ "contract", ContractJson() },
 				{ "capabilities",
 					json{
@@ -531,6 +536,16 @@ namespace dvb::tools::input
 							} },
 					} },
 			};
+			if (backend.nativeCapabilities)
+			{
+				auto native = backend.nativeCapabilities();
+				if (!native.is_object())
+					throw ToolError(
+						500, "native input capabilities returned a non-object result");
+				for (auto& [name, value] : native.items())
+					capabilities["capabilities"][name] = std::move(value);
+			}
+			return capabilities;
 		}
 
 		json Status()
@@ -1065,6 +1080,8 @@ namespace dvb::tools::input
 					logs::warn(
 						"devbench: keyboard service shutdown left {} native release(s) pending",
 						remaining);
+				if (backend.shutdownNative)
+					backend.shutdownNative();
 			}
 			catch (const std::exception& a_exception)
 			{
@@ -1094,7 +1111,7 @@ namespace dvb::tools::input
 	};
 
 	InputService::InputService(
-		EventBus& a_events, bool a_allowControlActions, KeyboardBackend a_backend) :
+		EventBus& a_events, bool a_allowControlActions, InputBackend a_backend) :
 		state_(std::make_shared<State>(a_events, a_allowControlActions, std::move(a_backend)))
 	{
 		state_->Start();
@@ -1116,9 +1133,45 @@ namespace dvb::tools::input
 
 			if (const auto it = a_args.find("device"); it != a_args.end() && !it->is_string())
 				throw ToolError(400, "'device' must be a string");
+			if (action == "releaseAll" && !a_args.contains("device"))
+			{
+				RequireToolPermission(
+					state_->allowControlActions, ToolPermission::kControlActions);
+				if (!a_context.internal && BooleanArgument(a_args, "all", false))
+					throw ToolError(
+						403, "all-owner input cleanup is reserved for internal lifecycle/replay paths");
+				const auto owner = ResolveOwner(a_args, a_context);
+				json       devices = json::object();
+				devices["keyboard"] = state_->ReleaseAll(
+					owner, a_context.internal && BooleanArgument(a_args, "all", false));
+				for (const auto& nativeDevice : state_->backend.nativeDevices)
+				{
+					if (!state_->backend.handleNative)
+						break;
+					auto nativeArgs = a_args;
+					nativeArgs["device"] = nativeDevice;
+					devices[nativeDevice] =
+						state_->backend.handleNative(nativeArgs, a_context);
+				}
+				return json{
+					{ "action", "releaseAll" },
+					{ "owner", owner },
+					{ "devices", std::move(devices) },
+				};
+			}
 			const auto device = a_args.value("device", std::string("keyboard"));
 			if (device != "keyboard")
-				throw ToolError(400, "input contract v1 supports only device='keyboard'");
+			{
+				if (std::ranges::find(state_->backend.nativeDevices, device) ==
+						state_->backend.nativeDevices.end() ||
+					!state_->backend.handleNative)
+					throw ToolError(
+						400, std::format("unsupported input device '{}'", device));
+				if (action != "status")
+					RequireToolPermission(
+						state_->allowControlActions, ToolPermission::kControlActions);
+				return state_->backend.handleNative(a_args, a_context);
+			}
 			if (action == "status")
 				return state_->Status();
 
@@ -1161,11 +1214,33 @@ namespace dvb::tools::input
 	void InputService::SetReady(bool a_ready) noexcept
 	{
 		state_->ready.store(a_ready, std::memory_order_release);
+		if (state_->backend.setNativeReady)
+		{
+			try
+			{
+				state_->backend.setNativeReady(a_ready);
+			}
+			catch (...)
+			{
+				logs::error("{}", "devbench: native input readiness update failed");
+			}
+		}
 	}
 
 	void InputService::ReleaseForLifecycle(std::string a_reason) noexcept
 	{
-		state_->RequestLifecycleRelease(std::move(a_reason));
+		state_->RequestLifecycleRelease(a_reason);
+		if (state_->backend.releaseNativeForLifecycle)
+		{
+			try
+			{
+				state_->backend.releaseNativeForLifecycle(std::move(a_reason));
+			}
+			catch (...)
+			{
+				logs::error("{}", "devbench: native input lifecycle release failed");
+			}
+		}
 	}
 
 	void InputService::Shutdown() noexcept
@@ -1174,12 +1249,18 @@ namespace dvb::tools::input
 			state_->Shutdown();
 	}
 
-	ToolDescriptor BuildInputDescriptor()
+	ToolDescriptor BuildInputDescriptor(const InputBackend* a_backend)
 	{
+		const InputBackend fallback;
+		const auto&       backend = a_backend ? *a_backend : fallback;
+		json              devices = json::array({ "keyboard" });
+		for (const auto& device : backend.nativeDevices)
+			if (device != "keyboard")
+				devices.push_back(device);
 		ToolDescriptor descriptor;
 		descriptor.name = "input";
 		descriptor.description =
-			"FO4-only synthetic keyboard input through Fallout 4's BSInputEventQueue. "
+			"Synthetic input through " + backend.gameName + "'s native input seams. "
 			"action='capabilities' (default) reports readiness, limits, injection path, and "
 			"the complete DirectInput scan-code catalog. Mutations require "
 			"allowControlActions=true. 'down' creates a bounded owner lease; same-owner down "
@@ -1188,8 +1269,8 @@ namespace dvb::tools::input
 			"and balanced before dispatch. 'releaseAll' is owner-scoped externally. Queued "
 			"native work is generation-gated so cancelled, expired, or lifecycle-invalidated "
 			"downs cannot execute later. Releases remain leased and retry until native "
-			"acknowledgement. Physical keyboard state is observed but never modified. This "
-			"contract does not expose VR tracked input or claim render-frame pacing.";
+			"acknowledgement. Physical keyboard state is observed but never modified. "
+			"Adapter-provided devices, when present, use the same permission and ownership surface.";
 		descriptor.inputSchema = json{
 			{ "type", "object" },
 			{ "properties",
@@ -1205,7 +1286,7 @@ namespace dvb::tools::input
 					{ "device",
 						json{
 							{ "type", "string" },
-							{ "enum", json::array({ "keyboard" }) },
+							{ "enum", std::move(devices) },
 						} },
 					{ "key",
 						json{
@@ -1254,12 +1335,13 @@ namespace dvb::tools::input
 
 	std::shared_ptr<InputService> RegisterInputTool(
 		ToolRegistry& a_registry, EventBus& a_events, bool a_allowControlActions,
-		KeyboardBackend a_backend)
+		InputBackend a_backend)
 	{
+		const auto descriptor = BuildInputDescriptor(std::addressof(a_backend));
 		auto service =
 			std::make_shared<InputService>(a_events, a_allowControlActions, std::move(a_backend));
 		const std::weak_ptr weak = service;
-		a_registry.Register(BuildInputDescriptor(),
+		a_registry.Register(descriptor,
 			[weak](const json& a_args, const ToolContext& a_context) {
 				const auto service = weak.lock();
 				if (!service)

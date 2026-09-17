@@ -41,6 +41,14 @@ namespace dvb::tools::recording
 
 	struct RecordingBackend
 	{
+		std::string              gameId = "fo4";
+		std::string              gameName = "Fallout 4";
+		std::vector<std::string> compatibleGameIds{
+			"fo4", "fallout4", "fallout 4"
+		};
+		std::vector<std::string> compatibleRuntimeVariants{ "ae" };
+		bool                     recordedOnVR = false;
+
 		// Main-thread-safe snapshot containing playerLoaded, frame, pose
 		// [x,y,z,yawDeg,pitchDeg], and scene identities.
 		std::function<json()> snapshot;
@@ -51,9 +59,19 @@ namespace dvb::tools::recording
 		// permission-checked console tool. A numeric CELL FormID is never
 		// reinterpreted as a COC editor-id token.
 		std::function<RecordingTransitionReceipt(const json&)> transition;
+
+		// Optional native activity seams. Input adapters publish normalized events
+		// on EventBus topic "input.activity". VR adapters may additionally provide
+		// a synchronized tracked-set snapshot and a replay-plan builder; the shared
+		// RecordingService remains the sole record/replay tool implementation.
+		std::function<json()> trackingSnapshot;
+		std::function<json()> activityCaptureContract;
+		std::function<json(
+			const json&, const json&, const std::string&, bool)>
+			buildTrackedInputReplay;
 	};
 
-	ToolDescriptor BuildRecordDescriptor();
+	ToolDescriptor BuildRecordDescriptor(const RecordingBackend* a_backend = nullptr);
 	ToolDescriptor BuildRecordingsDescriptor();
 
 	class RecordingService

@@ -1,5 +1,5 @@
 export interface SetupArguments {
-  game: "fo4";
+  game: string;
   install?: string;
   runtimeFile?: string;
   config?: string;
@@ -20,7 +20,7 @@ export function printSetupSnippet(
   ];
   const snippet = {
     mcpServers: {
-      "devbench-fo4": {
+      [`devbench-${args.game}`]: {
         command,
         args: cliArgs,
       },

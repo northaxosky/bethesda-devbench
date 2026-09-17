@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,10 @@ namespace dvb::tools
 
 	struct MenuBackend
 	{
+		std::string                                        gameName = "game";
+		std::vector<std::string>                           contextFreeOpenMenus;
+		std::string                                        dialogLimitations =
+			"cancelIndex may be unavailable on this runtime";
 		std::function<std::vector<std::string>()>          listOpenMenus;
 		std::function<std::optional<MenuDialogSnapshot>()> describeDialog;
 		std::function<json(MenuAcceptRequest)>             acceptDialog;
@@ -59,9 +64,10 @@ namespace dvb::tools
 		ToolHandler                  handler_;
 	};
 
-	bool IsContextFreeMenuOpenTarget(std::string_view a_name);
+	bool IsContextFreeMenuOpenTarget(
+		std::string_view a_name, std::span<const std::string> a_allowlist);
 
-	ToolDescriptor               BuildMenuDescriptor();
+	ToolDescriptor               BuildMenuDescriptor(const MenuBackend* a_backend = nullptr);
 	std::shared_ptr<MenuService> RegisterMenuTool(
 		ToolRegistry& a_registry, bool a_allowControlActions, MenuBackend a_backend);
 }
