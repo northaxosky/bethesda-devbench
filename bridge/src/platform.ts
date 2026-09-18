@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { readlinkSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { delimiter, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -267,11 +267,16 @@ export function resolvePwshExecutable(
   const found = [...new Set(candidates.map((candidate) => candidate.toLowerCase()))]
     .map((lower) => candidates.find((candidate) => candidate.toLowerCase() === lower))
     .find((candidate): candidate is string => {
-      if (!candidate || !existsSync(candidate)) return false;
+      if (!candidate) return false;
       try {
         return statSync(candidate).isFile();
       } catch {
-        return false;
+        // Store app-execution aliases can launch even when stat cannot follow them.
+        try {
+          return statSync(resolve(dirname(candidate), readlinkSync(candidate))).isFile();
+        } catch {
+          return false;
+        }
       }
     });
   if (found) return found;

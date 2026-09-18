@@ -194,8 +194,10 @@ The helper is spawned attached with:
 ```
 
 The Node client resolves PowerShell 7's `pwsh.exe` to an absolute path from
-`PATH` or the standard `%ProgramFiles%\PowerShell\7` installation. It does not
-fall back to Windows PowerShell 5.1 and never uses `-ExecutionPolicy Bypass`.
+`PATH` (including enabled Microsoft Store app-execution aliases) before the
+standard `%ProgramFiles%\PowerShell\7` installation. Store aliases are checked
+against their linked executable and launched through the alias. The client does
+not fall back to Windows PowerShell 5.1 and never uses `-ExecutionPolicy Bypass`.
 
 EOF and bridge shutdown release native handles/lease; they do not kill the game
 or MO2. The standalone build uses the project-local Bun package only.
