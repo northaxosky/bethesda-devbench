@@ -47,9 +47,9 @@ namespace dvb::fallout4
 				out.x = free->translation.x;
 				out.y = free->translation.y;
 				out.z = free->translation.z;
-				// Fallout 4 stores heading at rotation.x and pitch at rotation.y.
-				out.yaw = free->rotation.x;
-				out.pitch = free->rotation.y;
+				// In-game captures on AE 1.11.240: rotation.x tilts, rotation.y turns.
+				out.pitch = free->rotation.x;
+				out.yaw = free->rotation.y;
 			}
 			else if (a_camera.cameraRoot)
 			{
@@ -330,10 +330,8 @@ namespace dvb::fallout4
 								static_cast<RE::FreeCameraState*>(camera->currentState.get());
 							freeCamera->translation =
 								RE::NiPoint3{ request.x, request.y, request.z };
-							// Native FreeCameraState stores heading at +0x34 (x) and
-							// pitch at +0x38 (y), opposite the old upstream assignment.
-							freeCamera->rotation.x = request.yaw;
-							freeCamera->rotation.y = request.pitch;
+							freeCamera->rotation.x = request.pitch;
+							freeCamera->rotation.y = request.yaw;
 
 							auto result = StateResult(
 								"drive", SnapshotCamera(*camera, *ownership));
@@ -341,8 +339,8 @@ namespace dvb::fallout4
 								freeCamera->translation.x == request.x &&
 								freeCamera->translation.y == request.y &&
 								freeCamera->translation.z == request.z &&
-								freeCamera->rotation.x == request.yaw &&
-								freeCamera->rotation.y == request.pitch;
+								freeCamera->rotation.x == request.pitch &&
+								freeCamera->rotation.y == request.yaw;
 							return result;
 						});
 				},
