@@ -184,7 +184,7 @@ namespace dvb::skyrimse
 		}
 	}
 
-	tools::CameraBackend MakeCameraBackend(std::string)
+	tools::CameraBackend MakeCameraBackend()
 	{
 		auto ownership = std::make_shared<tools::FreeCameraOwnership>();
 		auto runner =

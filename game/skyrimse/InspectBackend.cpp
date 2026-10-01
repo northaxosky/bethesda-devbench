@@ -14,11 +14,10 @@ namespace dvb::skyrimse
 {
 	namespace
 	{
-		json Identity(std::string_view a_runtimeVersion)
+		json Identity()
 		{
 			json identity{
 				{ "game", "Skyrim" },
-				{ "runtime", a_runtimeVersion },
 			};
 			identity.update(InstanceIdentity());
 			return identity;
@@ -97,10 +96,10 @@ namespace dvb::skyrimse
 			};
 		}
 
-		json ReadState(std::string_view a_runtimeVersion)
+		json ReadState()
 		{
 			auto out =
-				MainThread::RunAndWait([runtime = std::string(a_runtimeVersion)]() -> json {
+				MainThread::RunAndWait([]() -> json {
 					const auto lifecycle = Lifecycle::GetSnapshot();
 					const auto live = ReadLivePlayer();
 					json       menus = lifecycle.openMenus;
@@ -108,7 +107,6 @@ namespace dvb::skyrimse
 						{ "plugin", "devbench" },
 						{ "version", DEVBENCH_VERSION_STRING },
 						{ "game", "Skyrim" },
-						{ "runtime", runtime },
 						{ "playerLoaded", live.readiness.loaded },
 						{ "unavailableReason",
 							live.readiness.loaded ?
@@ -304,10 +302,10 @@ namespace dvb::skyrimse
 		}
 	}
 
-	tools::InspectBackend MakeInspectBackend(std::string a_runtimeVersion)
+	tools::InspectBackend MakeInspectBackend()
 	{
 		return tools::InspectBackend{
-			.health = [runtime = a_runtimeVersion] {
+			.health = [] {
 				const auto lifecycle = Lifecycle::GetSnapshot();
 				json out{
 					{ "ok", true },
@@ -319,12 +317,10 @@ namespace dvb::skyrimse
 							json(nullptr) :
 							json(lifecycle.lastEvent) },
 				};
-				out.update(Identity(runtime));
+				out.update(Identity());
 				return out;
 			},
-			.state = [runtime = a_runtimeVersion] {
-				return ReadState(runtime);
-			},
+			.state = &ReadState,
 			.player = &ReadPlayer,
 			.scene = &ReadScene,
 			.mods = &ReadMods,

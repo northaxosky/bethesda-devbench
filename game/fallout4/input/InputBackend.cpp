@@ -2,6 +2,7 @@
 
 #include "GameState.h"
 #include "MainThread.h"
+#include "game/fallout4/Runtime.h"
 
 #include <atomic>
 #include <cstddef>
@@ -15,9 +16,8 @@ namespace dvb::fallout4
 		using tools::input::DispatchStatus;
 		using tools::input::DispatchSubmission;
 
-		constexpr REL::Version kSupportedRuntime{ 1, 11, 240, 0 };
-		constexpr std::size_t  kKeyboardCurrentStateOffset = 0x70;
-		constexpr std::size_t  kQueueGenerationOffset = 0x1490;
+		constexpr std::size_t kKeyboardCurrentStateOffset = 0x70;
+		constexpr std::size_t kQueueGenerationOffset = 0x1490;
 
 		// AE 1.11.240, Fallout4.exe SHA-256
 		// FDCEF37AC1230AF6D0B0050EB2142B139EF3A867B37B9211FB6EDFCC646072F8:
@@ -33,37 +33,6 @@ namespace dvb::fallout4
 		// allocating an event, appending blindly, or invoking receivers manually.
 		using AddButtonEvent_t =
 			void(void*, std::int32_t, std::int32_t, std::uint32_t, float, float);
-
-		bool RuntimeSupported() noexcept
-		{
-			static const bool supported = []() noexcept {
-				try
-				{
-					const auto runtime = REX::FModule::GetExecutingModule().GetFileVersion();
-					if (!REX::FModule::IsRuntimeAE() || runtime != kSupportedRuntime)
-					{
-						logs::error(
-							"devbench: native keyboard input disabled for runtime {}; only "
-							"Fallout 4 AE 1.11.240 is supported",
-							runtime.string("."));
-						return false;
-					}
-					return true;
-				}
-				catch (const std::exception& a_exception)
-				{
-					logs::error(
-						"devbench: native keyboard runtime validation failed: {}", a_exception.what());
-					return false;
-				}
-				catch (...)
-				{
-					logs::error("{}", "devbench: native keyboard runtime validation failed");
-					return false;
-				}
-			}();
-			return supported;
-		}
 
 		DispatchResult ApplyButton(const ButtonCommand& a_command)
 		{
@@ -81,7 +50,7 @@ namespace dvb::fallout4
 				~FinishGate() { gate->Finish(); }
 			} finish{ a_command.gate };
 
-			if (!RuntimeSupported())
+			if (!IsSupportedRuntime())
 			{
 				return {
 					DispatchStatus::kUnavailable, -1, false,

@@ -5,6 +5,6 @@
 namespace dvb::skyrimse
 {
 	GameProfile CurrentProfile();
-	HostAdapter MakeHostAdapter(std::string a_runtimeVersion);
+	HostAdapter MakeHostAdapter();
 	int         CurrentFrame();
 }

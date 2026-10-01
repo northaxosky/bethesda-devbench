@@ -1,6 +1,7 @@
 #include "PapyrusBackend.h"
 
 #include "game/fallout4/Lifecycle.h"
+#include "game/fallout4/Runtime.h"
 #include "game/fallout4/inspection/Form.h"
 
 #include <algorithm>
@@ -371,11 +372,7 @@ namespace dvb::fallout4::papyrus
 			Vm& a_vm, const RE::BSFixedString& a_typeName,
 			RE::BSTSmartPointer<bss::Object>& a_object)
 		{
-			constexpr REL::Version kSupportedRuntime{ 1, 11, 240, 0 };
-			if (!REX::FModule::IsRuntimeAE() ||
-				REX::FModule::GetExecutingModule().GetFileVersion() != kSupportedRuntime)
-				throw ToolError(
-					503, "native Papyrus object creation requires Fallout 4 AE 1.11.240");
+			RequireSupportedRuntime("native Papyrus object creation");
 
 			using CreateObject = bool (*)(
 				Vm*, const RE::BSFixedString&, RE::BSTSmartPointer<bss::Object>&);

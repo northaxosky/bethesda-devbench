@@ -8,8 +8,7 @@
 
 namespace
 {
-	dvb::Host   g_host;
-	std::string g_runtimeVersion;
+	dvb::Host g_host;
 
 	void LogCallbackError(
 		std::string_view a_context, const char* a_detail = nullptr) noexcept
@@ -30,7 +29,7 @@ namespace
 		try
 		{
 			if (!g_host.Start(
-					dvb::fallout4::MakeHostAdapter(g_runtimeVersion)))
+					dvb::fallout4::MakeHostAdapter()))
 				REX::INFO(
 					"{}", "devbench: native host did not start (disabled or unavailable)");
 		}
@@ -122,9 +121,8 @@ namespace
 	bool InitPlugin(const F4SE::LoadInterface* a_f4se)
 	{
 		F4SE::Init(a_f4se, F4SE::InitInfo{});
-		g_runtimeVersion = a_f4se->RuntimeVersion().string(".");
 		dvb::InitializeRuntimeContext(dvb::MakeRuntimeContext(
-			dvb::Fallout4Profile(), g_runtimeVersion,
+			dvb::Fallout4Profile(), a_f4se->RuntimeVersion().string("."),
 			reinterpret_cast<const void*>(&InitPlugin),
 			&dvb::fallout4::CurrentFrame,
 			[](std::function<void()> a_task) {

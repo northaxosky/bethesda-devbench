@@ -1,5 +1,6 @@
 #include "RestBackend.h"
 
+#include "game/fallout4/Runtime.h"
 #include "game/fallout4/inspection/Form.h"
 
 #include <algorithm>
@@ -20,44 +21,10 @@ namespace dvb::fallout4
 		using tools::rest::RestResultStatus;
 		using tools::rest::RestSubmission;
 
-		constexpr REL::Version     kSupportedRuntime{ 1, 11, 240, 0 };
 		constexpr auto             kPollInterval = 25ms;
 		constexpr auto             kMenuOpenTimeout = 5s;
 		constexpr std::uint32_t    kCanSleepFurnitureFlag = 0x80000000u;
 		constexpr std::string_view kMenuName = "SleepWaitMenu";
-
-		bool RuntimeSupported() noexcept
-		{
-			static const bool supported = []() noexcept {
-				try
-				{
-					const auto runtime = REX::FModule::GetExecutingModule().GetFileVersion();
-					if (!REX::FModule::IsRuntimeAE() || runtime != kSupportedRuntime)
-					{
-						logs::error(
-							"devbench: native wait/sleep disabled for runtime {}; only Fallout "
-							"4 AE 1.11.240 is supported",
-							runtime.string("."));
-						return false;
-					}
-					return true;
-				}
-				catch (const std::exception& a_exception)
-				{
-					logs::error(
-						"devbench: native wait/sleep runtime validation failed: {}",
-						a_exception.what());
-					return false;
-				}
-				catch (...)
-				{
-					logs::error(
-						"{}", "devbench: native wait/sleep runtime validation failed");
-					return false;
-				}
-			}();
-			return supported;
-		}
 
 		std::optional<double> CurrentGameHours()
 		{
@@ -212,7 +179,7 @@ namespace dvb::fallout4
 						"shared game-operation reservation was no longer dispatchable"
 					};
 
-				if (!RuntimeSupported())
+				if (!IsSupportedRuntime())
 					return RestResult{
 						RestResultStatus::kUnavailable, false, std::nullopt,
 						"native wait/sleep is unavailable outside Fallout 4 AE 1.11.240"
@@ -422,7 +389,7 @@ namespace dvb::fallout4
 					json{
 						{ "nativeCompleted", true },
 						{ "autosavePolicy", "native" },
-						{ "runtimeValidated", RuntimeSupported() },
+						{ "runtimeValidated", IsSupportedRuntime() },
 					}
 				};
 			}
@@ -587,8 +554,8 @@ namespace dvb::fallout4
 		auto state = std::make_shared<NativeBackendState>();
 		return {
 			.implementation = "Fallout4.SleepWaitMenu",
-			.available = RuntimeSupported(),
-			.runtimeValidated = RuntimeSupported(),
+			.available = IsSupportedRuntime(),
+			.runtimeValidated = IsSupportedRuntime(),
 			.dispatch = [state](RestCommand a_command) { return state->Dispatch(std::move(a_command)); },
 			.shutdown = [state] { state->Shutdown(); },
 		};

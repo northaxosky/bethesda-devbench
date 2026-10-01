@@ -1,13 +1,14 @@
 #include "CameraBackend.h"
 
 #include "MainThread.h"
+#include "game/fallout4/Runtime.h"
 #include "tools/camera/MutationDispatch.h"
 
 namespace dvb::fallout4
 {
 	namespace
 	{
-		constexpr std::string_view kSupportedRuntime = "1.11.240.0";
+		constexpr std::string_view kFeature = "camera controls";
 		constexpr std::uintptr_t   kStartAutoVanityRva = 0x102B4A0;
 
 		bool IsFreeCamera(const RE::PlayerCamera& a_camera)
@@ -90,15 +91,6 @@ namespace dvb::fallout4
 			if (a_snapshot.yaw)
 				out["camYaw"] = *a_snapshot.yaw;
 			return out;
-		}
-
-		void RequireSupportedRuntime(std::string_view a_runtimeVersion)
-		{
-			if (a_runtimeVersion != kSupportedRuntime)
-				throw ToolError(503,
-					std::format(
-						"camera controls require Fallout 4 {}, current runtime is {}",
-						kSupportedRuntime, a_runtimeVersion));
 		}
 
 		tools::CancelableMutationRunner::Submit MainThreadSubmitter()
@@ -209,19 +201,19 @@ namespace dvb::fallout4
 		}
 	}
 
-	tools::CameraBackend MakeCameraBackend(std::string a_runtimeVersion)
+	tools::CameraBackend MakeCameraBackend()
 	{
 		auto ownership = std::make_shared<tools::FreeCameraOwnership>();
 		auto runner =
 			std::make_shared<tools::CancelableMutationRunner>(MainThreadSubmitter());
 
 		return tools::CameraBackend{
-			.get = [runtime = a_runtimeVersion, ownership] {
-				RequireSupportedRuntime(runtime);
+			.get = [ownership] {
+				RequireSupportedRuntime(kFeature);
 				return ReadCamera(*ownership); },
 			.setPov =
-				[runtime = a_runtimeVersion, ownership, runner](tools::CameraPov a_pov) {
-					RequireSupportedRuntime(runtime);
+				[ownership, runner](tools::CameraPov a_pov) {
+					RequireSupportedRuntime(kFeature);
 					return runner->Run("camera setPov",
 						[a_pov, ownership]() -> json {
 							const auto camera = RE::PlayerCamera::GetSingleton();
@@ -240,8 +232,8 @@ namespace dvb::fallout4
 						});
 				},
 			.setFreeCamera =
-				[runtime = a_runtimeVersion, ownership, runner](bool a_on) {
-					RequireSupportedRuntime(runtime);
+				[ownership, runner](bool a_on) {
+					RequireSupportedRuntime(kFeature);
 					return runner->Run("camera freecam",
 						[a_on, ownership]() -> json {
 							const auto camera = RE::PlayerCamera::GetSingleton();
@@ -316,9 +308,9 @@ namespace dvb::fallout4
 						});
 				},
 			.drive =
-				[runtime = a_runtimeVersion, ownership, runner](
+				[ownership, runner](
 					const tools::CameraDriveRequest& a_request) {
-					RequireSupportedRuntime(runtime);
+					RequireSupportedRuntime(kFeature);
 					return runner->Run("camera drive",
 						[request = a_request, ownership]() -> json {
 							const auto camera = RE::PlayerCamera::GetSingleton();

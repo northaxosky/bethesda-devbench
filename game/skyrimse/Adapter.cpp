@@ -35,14 +35,14 @@ namespace dvb::skyrimse
 			                      RuntimeVariant::kSkyrimSE);
 	}
 
-	HostAdapter MakeHostAdapter(std::string a_runtimeVersion)
+	HostAdapter MakeHostAdapter()
 	{
 		auto profile = CurrentProfile();
-		auto inspect = MakeInspectBackend(a_runtimeVersion);
+		auto inspect = MakeInspectBackend();
 		auto input = MakeInputBackend();
 		input.gameName = profile.displayName;
 		input.extenderName = profile.extenderName;
-		auto menu = MakeMenuBackend(a_runtimeVersion);
+		auto menu = MakeMenuBackend();
 		menu.gameName = profile.displayName;
 		menu.contextFreeOpenMenus = profile.contextFreeMenus;
 		auto recording = recording::MakeRecordingBackend();
@@ -55,7 +55,6 @@ namespace dvb::skyrimse
 
 		return HostAdapter{
 			.profile = std::move(profile),
-			.runtimeVersion = std::move(a_runtimeVersion),
 			.console = [](EventBus& a_events) {
 				auto lifetime =
 					std::make_shared<ConsoleBackendLifetime>(a_events);
@@ -68,7 +67,7 @@ namespace dvb::skyrimse
 			.inspect = inspect,
 			.input = std::move(input),
 			.menu = std::move(menu),
-			.camera = MakeCameraBackend(a_runtimeVersion),
+			.camera = MakeCameraBackend(),
 			.papyrus = papyrus::MakePapyrusBackend(),
 			.capture = capture::MakeCaptureBackend(inspect.scene),
 			.recording = std::move(recording),

@@ -2,11 +2,9 @@
 
 #include "tools/camera/CameraTool.h"
 
-#include <string>
-
 namespace dvb::skyrimse
 {
-	tools::CameraBackend MakeCameraBackend(std::string a_runtimeVersion);
+	tools::CameraBackend MakeCameraBackend();
 
 	// Main-thread lifecycle hooks used to invalidate queued VR camera work across loads.
 	void CameraPreLoad() noexcept;

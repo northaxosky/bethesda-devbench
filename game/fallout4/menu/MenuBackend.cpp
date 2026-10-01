@@ -2,6 +2,7 @@
 
 #include "MainThread.h"
 #include "game/fallout4/Lifecycle.h"
+#include "game/fallout4/Runtime.h"
 #include "tools/camera/MutationDispatch.h"
 
 #include <cstring>
@@ -10,7 +11,7 @@ namespace dvb::fallout4
 {
 	namespace
 	{
-		constexpr std::string_view kSupportedRuntime = "1.11.240.0";
+		constexpr std::string_view kFeature = "menu controls";
 		constexpr std::size_t      kAeCurrentMessageOffset = 0xF0;
 
 		struct LiveDialog
@@ -19,20 +20,11 @@ namespace dvb::fallout4
 			tools::MenuDialogSnapshot          snapshot;
 		};
 
-		void RequireSupportedRuntime(std::string_view a_runtimeVersion)
-		{
-			if (a_runtimeVersion != kSupportedRuntime)
-				throw ToolError(503,
-					std::format(
-						"menu controls require Fallout 4 {}, current runtime is {}",
-						kSupportedRuntime, a_runtimeVersion));
-		}
-
 		RE::MessageBoxData* CurrentMessageAE(RE::MessageBoxMenu* a_menu)
 		{
 			RE::MessageBoxData* message = nullptr;
 			// AE 1.11.240 moved the live pointer to +0xF0; CommonLib's named +0xE8
-			// member is wrong for this exact, server-gated runtime.
+			// member is wrong for this exact, gated runtime.
 			std::memcpy(
 				std::addressof(message),
 				reinterpret_cast<const std::byte*>(a_menu) + kAeCurrentMessageOffset,
@@ -113,10 +105,9 @@ namespace dvb::fallout4
 			};
 		}
 
-		std::optional<tools::MenuDialogSnapshot> DescribeDialog(
-			std::string_view a_runtimeVersion)
+		std::optional<tools::MenuDialogSnapshot> DescribeDialog()
 		{
-			RequireSupportedRuntime(a_runtimeVersion);
+			RequireSupportedRuntime(kFeature);
 			const auto result = MainThread::RunAndWait([]() -> json {
 				const auto dialog = ReadLiveDialog();
 				return dialog ? SnapshotJson(dialog->snapshot) : json(nullptr);
@@ -127,11 +118,10 @@ namespace dvb::fallout4
 		}
 
 		json AcceptDialog(
-			std::string_view                 a_runtimeVersion,
 			tools::CancelableMutationRunner& a_runner,
 			tools::MenuAcceptRequest         a_request)
 		{
-			RequireSupportedRuntime(a_runtimeVersion);
+			RequireSupportedRuntime(kFeature);
 			return a_runner.Run("menu accept",
 				[request = std::move(a_request)]() -> json {
 					const auto dialog = ReadLiveDialog();
@@ -183,23 +173,23 @@ namespace dvb::fallout4
 		}
 	}
 
-	tools::MenuBackend MakeMenuBackend(std::string a_runtimeVersion)
+	tools::MenuBackend MakeMenuBackend()
 	{
 		auto runner =
 			std::make_shared<tools::CancelableMutationRunner>(MainThreadSubmitter());
 		return tools::MenuBackend{
 			.listOpenMenus = [] { return Lifecycle::GetSnapshot().openMenus; },
-			.describeDialog = [runtime = a_runtimeVersion] { return DescribeDialog(runtime); },
+			.describeDialog = &DescribeDialog,
 			.acceptDialog =
-				[runtime = a_runtimeVersion, runner](tools::MenuAcceptRequest a_request) {
-					return AcceptDialog(runtime, *runner, std::move(a_request));
+				[runner](tools::MenuAcceptRequest a_request) {
+					return AcceptDialog(*runner, std::move(a_request));
 				},
-			.openMenu = [runtime = a_runtimeVersion, runner](std::string a_name) {
-				RequireSupportedRuntime(runtime);
+			.openMenu = [runner](std::string a_name) {
+				RequireSupportedRuntime(kFeature);
 				return QueueMenuMessage(
 					*runner, std::move(a_name), RE::UI_MESSAGE_TYPE::kShow, "open"); },
-			.closeMenu = [runtime = a_runtimeVersion, runner](std::string a_name) {
-				RequireSupportedRuntime(runtime);
+			.closeMenu = [runner](std::string a_name) {
+				RequireSupportedRuntime(kFeature);
 				return QueueMenuMessage(
 					*runner, std::move(a_name), RE::UI_MESSAGE_TYPE::kHide, "close"); },
 		};

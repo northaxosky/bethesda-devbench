@@ -14,11 +14,10 @@ namespace dvb::fallout4
 {
 	namespace
 	{
-		json Identity(std::string_view a_runtimeVersion)
+		json Identity()
 		{
 			json identity{
 				{ "game", "Fallout 4" },
-				{ "runtime", a_runtimeVersion },
 			};
 			identity.update(InstanceIdentity());
 			return identity;
@@ -84,9 +83,9 @@ namespace dvb::fallout4
 			};
 		}
 
-		json ReadState(std::string_view a_runtimeVersion)
+		json ReadState()
 		{
-			auto out = MainThread::RunAndWait([runtime = std::string(a_runtimeVersion)]() -> json {
+			auto out = MainThread::RunAndWait([]() -> json {
 				const auto lifecycle = Lifecycle::GetSnapshot();
 				const auto live = ReadLivePlayer();
 				json       menus = lifecycle.openMenus;
@@ -94,7 +93,6 @@ namespace dvb::fallout4
 					{ "plugin", "devbench" },
 					{ "version", DEVBENCH_VERSION_STRING },
 					{ "game", "Fallout 4" },
-					{ "runtime", runtime },
 					{ "playerLoaded", live.readiness.loaded },
 					{ "unavailableReason", live.readiness.loaded ? json(nullptr) : json(live.readiness.reason) },
 					{ "menus", json{
@@ -287,10 +285,10 @@ namespace dvb::fallout4
 		}
 	}
 
-	tools::InspectBackend MakeInspectBackend(std::string a_runtimeVersion)
+	tools::InspectBackend MakeInspectBackend()
 	{
 		return tools::InspectBackend{
-			.health = [runtime = a_runtimeVersion] {
+			.health = [] {
 				const auto lifecycle = Lifecycle::GetSnapshot();
 				json       out{
 						  { "ok", true },
@@ -299,9 +297,9 @@ namespace dvb::fallout4
 						  { "pendingTasks", MainThread::PendingTasks() },
 						  { "lastLifecycle", lifecycle.lastEvent.empty() ? json(nullptr) : json(lifecycle.lastEvent) },
 				};
-				out.update(Identity(runtime));
+				out.update(Identity());
 				return out; },
-			.state = [runtime = a_runtimeVersion] { return ReadState(runtime); },
+			.state = &ReadState,
 			.player = &ReadPlayer,
 			.scene = &ReadScene,
 			.mods = &ReadMods,

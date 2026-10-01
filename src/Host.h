@@ -33,7 +33,6 @@ namespace dvb
 	struct HostAdapter
 	{
 		GameProfile profile;
-		std::string runtimeVersion;
 
 		std::function<ConsoleBinding(EventBus&)> console;
 		tools::GameBackend                       game;

@@ -69,13 +69,12 @@ namespace
 		}
 	}
 
-	void StartHost(std::string a_runtimeVersion) noexcept
+	void StartHost() noexcept
 	{
 		try
 		{
 			if (!g_host.Start(
-					dvb::skyrimse::MakeHostAdapter(
-						std::move(a_runtimeVersion))))
+					dvb::skyrimse::MakeHostAdapter()))
 				logs::info(
 					"{}", "devbench: native host did not start (disabled or unavailable)");
 		}
@@ -107,7 +106,7 @@ namespace
 
 			if (a_message->type == SKSE::MessagingInterface::kPostLoad)
 			{
-				StartHost(REL::Module::get().version().string("."));
+				StartHost();
 				if (g_host.Running())
 				if (auto* messaging = SKSE::GetMessagingInterface())
 					messaging->RegisterListener(

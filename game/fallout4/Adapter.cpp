@@ -4,6 +4,7 @@
 #include "GameBackend.h"
 #include "InspectBackend.h"
 #include "Lifecycle.h"
+#include "Runtime.h"
 #include "camera/CameraBackend.h"
 #include "capture/CaptureBackend.h"
 #include "input/InputBackend.h"
@@ -14,14 +15,14 @@
 
 namespace dvb::fallout4
 {
-	HostAdapter MakeHostAdapter(std::string a_runtimeVersion)
+	HostAdapter MakeHostAdapter()
 	{
 		auto profile = Fallout4Profile();
-		auto inspect = MakeInspectBackend(a_runtimeVersion);
+		auto inspect = MakeInspectBackend();
 		auto input = MakeInputBackend();
 		input.gameName = profile.displayName;
 		input.extenderName = profile.extenderName;
-		auto menu = MakeMenuBackend(a_runtimeVersion);
+		auto menu = MakeMenuBackend();
 		menu.gameName = profile.displayName;
 		menu.contextFreeOpenMenus = profile.contextFreeMenus;
 		auto recording = MakeRecordingBackend();
@@ -34,7 +35,6 @@ namespace dvb::fallout4
 
 		return HostAdapter{
 			.profile = std::move(profile),
-			.runtimeVersion = std::move(a_runtimeVersion),
 			.console = [](EventBus& a_events) {
 				auto lifetime =
 					std::make_shared<ConsoleBackendLifetime>(a_events);
@@ -47,7 +47,7 @@ namespace dvb::fallout4
 			.inspect = inspect,
 			.input = std::move(input),
 			.menu = std::move(menu),
-			.camera = MakeCameraBackend(a_runtimeVersion),
+			.camera = MakeCameraBackend(),
 			.papyrus = papyrus::MakePapyrusBackend(),
 			.capture = capture::MakeCaptureBackend(inspect.scene),
 			.recording = std::move(recording),
@@ -75,17 +75,8 @@ namespace dvb::fallout4
 		static const auto counter = []() noexcept -> std::uint32_t* {
 			try
 			{
-				constexpr REL::Version supported{ 1, 11, 240, 0 };
-				const auto runtime =
-					REX::FModule::GetExecutingModule().GetFileVersion();
-				if (!REX::FModule::IsRuntimeAE() || runtime != supported)
-				{
-					REX::ERROR(
-						"devbench: frame source unavailable for runtime {}; only "
-						"Fallout 4 AE 1.11.240 is supported",
-						runtime.string("."));
+				if (!IsSupportedRuntime())
 					return nullptr;
-				}
 				static REL::Relocation<std::uint32_t*> value{
 					REL::ID(2664106)
 				};

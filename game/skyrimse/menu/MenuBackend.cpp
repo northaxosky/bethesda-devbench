@@ -134,7 +134,7 @@ namespace dvb::skyrimse
 		}
 	}
 
-	tools::MenuBackend MakeMenuBackend(std::string)
+	tools::MenuBackend MakeMenuBackend()
 	{
 		auto runner =
 			std::make_shared<tools::CancelableMutationRunner>(MainThreadSubmitter());

@@ -4,6 +4,6 @@
 
 namespace dvb::fallout4
 {
-	HostAdapter MakeHostAdapter(std::string a_runtimeVersion);
+	HostAdapter MakeHostAdapter();
 	int         CurrentFrame();
 }
