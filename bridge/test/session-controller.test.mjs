@@ -15,15 +15,14 @@ import test from "node:test";
 
 import { SessionConfigProvider } from "../dist/config.js";
 import { RemoteClient } from "../dist/remote.js";
-import { createRuntimeTarget } from "../dist/runtime.js";
+import { createRuntimeTarget, processInstanceId } from "../dist/runtime.js";
 import { SessionController } from "../dist/session.js";
 
 test("session run orchestrates fixture, scenario, evidence, and graceful stop", async (t) => {
   const fixture = await createFixture(t);
   const server = await startWorkflowServer(fixture, { scenarioOk: true });
   t.after(() => server.close());
-  await writeRuntime(fixture.runtimeFile, server.identity);
-  const platform = new FakePlatform(fixture, { closeExits: true });
+  const platform = new FakePlatform(fixture, { closeExits: true, server });
   const controller = createController(fixture, platform);
   t.after(() => controller.shutdown());
 
@@ -55,8 +54,7 @@ test("leave-running releases ownership and a later stop is refused", async (t) =
   const fixture = await createFixture(t);
   const server = await startWorkflowServer(fixture, { scenarioOk: true });
   t.after(() => server.close());
-  await writeRuntime(fixture.runtimeFile, server.identity);
-  const platform = new FakePlatform(fixture, { closeExits: true });
+  const platform = new FakePlatform(fixture, { closeExits: true, server });
   const controller = createController(fixture, platform);
   t.after(() => controller.shutdown());
 
@@ -81,8 +79,7 @@ test("run waits for native load availability after the HTTP listener starts", as
   const fixture = await createFixture(t);
   const server = await startWorkflowServer(fixture, { scenarioOk: true, bootPolls: 3 });
   t.after(() => server.close());
-  await writeRuntime(fixture.runtimeFile, server.identity);
-  const platform = new FakePlatform(fixture, { closeExits: true });
+  const platform = new FakePlatform(fixture, { closeExits: true, server });
   const controller = createController(fixture, platform);
   t.after(() => controller.shutdown());
   const queued = await controller.handle({
@@ -104,8 +101,7 @@ test("stop never adopts borrowed games and force is explicit", async (t) => {
 
   const server = await startWorkflowServer(fixture, { scenarioOk: true });
   t.after(() => server.close());
-  await writeRuntime(fixture.runtimeFile, server.identity);
-  const forcePlatform = new FakePlatform(fixture, { closeExits: false });
+  const forcePlatform = new FakePlatform(fixture, { closeExits: false, server });
   const forceController = createController(fixture, forcePlatform);
   t.after(() => forceController.shutdown());
   const queued = await forceController.handle({
@@ -125,8 +121,7 @@ test("scenario failure is not a pass and still captures fresh evidence", async (
   const fixture = await createFixture(t);
   const server = await startWorkflowServer(fixture, { scenarioOk: false });
   t.after(() => server.close());
-  await writeRuntime(fixture.runtimeFile, server.identity);
-  const platform = new FakePlatform(fixture, { closeExits: true });
+  const platform = new FakePlatform(fixture, { closeExits: true, server });
   const controller = createController(fixture, platform);
   t.after(() => controller.shutdown());
 
@@ -151,9 +146,9 @@ test("native identity mismatch fails closed and cleans only the owned process", 
   const fixture = await createFixture(t);
   const server = await startWorkflowServer(fixture, { scenarioOk: true });
   t.after(() => server.close());
-  await writeRuntime(fixture.runtimeFile, server.identity);
   const platform = new FakePlatform(fixture, {
     closeExits: true,
+    server,
     pluginPath: join(dirname(fixture.dll), "wrong-devbench.dll"),
   });
   const controller = createController(fixture, platform);
@@ -195,12 +190,62 @@ test("startup timeout is a launch failure with owned-process evidence and cleanu
   assert.equal(platform.closeCalls, 1);
 });
 
+test("a post-load main-thread stall is retried for read-only readiness", async (t) => {
+  const fixture = await createFixture(t);
+  const server = await startWorkflowServer(fixture, { scenarioOk: true, inspectStalls: 2 });
+  t.after(() => server.close());
+  const platform = new FakePlatform(fixture, { closeExits: true, server });
+  const controller = createController(fixture, platform);
+  t.after(() => controller.shutdown());
+
+  const queued = await controller.handle({
+    action: "run", fixture: "DevBenchFixture01", steps: [],
+  });
+  const status = await waitForJob(controller, queued.value.runId);
+  assert.equal(status.job.result.ok, true);
+  assert.equal(server.loadCalls, 1);
+  assert.equal(
+    status.job.result.transcript.filter((entry) => entry.stage === "observe.retry").length,
+    2,
+  );
+});
+
+test("a game that exits after a timed-out stop is never reused by the next run", async (t) => {
+  const fixture = await createFixture(t);
+  const server = await startWorkflowServer(fixture, { scenarioOk: true });
+  t.after(() => server.close());
+  const platform = new FakePlatform(fixture, { closeExits: false, server });
+  const controller = createController(fixture, platform);
+  t.after(() => controller.shutdown());
+
+  const first = await controller.handle({
+    action: "run", fixture: "DevBenchFixture01", steps: [],
+  });
+  const firstStatus = await waitForJob(controller, first.value.runId);
+  assert.equal(firstStatus.job.result.phase, "cleanupfailed");
+  assert.equal(firstStatus.ownership.owned, true);
+  const firstInstance = firstStatus.job.result.instanceId;
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  platform.running = false;
+  platform.options.closeExits = true;
+  const second = await controller.handle({
+    action: "run", fixture: "DevBenchFixture01", steps: [],
+  });
+  const secondStatus = await waitForJob(controller, second.value.runId);
+  assert.equal(secondStatus.job.result.ok, true);
+  assert.equal(platform.startCalls, 2);
+  assert.notEqual(secondStatus.job.result.instanceId, firstInstance);
+});
+
 class FakePlatform {
   constructor(fixture, options) {
     this.fixture = fixture;
     this.options = options;
     this.owned = false;
     this.running = false;
+    this.creationTime = "2026-09-15T17:00:00.000Z";
+    this.startCalls = 0;
     this.closeCalls = 0;
     this.terminateCalls = 0;
     this.releaseCalls = 0;
@@ -208,8 +253,15 @@ class FakePlatform {
 
   async start() {
     if (this.running) throw new Error("existing game");
+    this.startCalls++;
     this.owned = true;
     this.running = true;
+    this.creationTime = new Date().toISOString();
+    const server = this.options.server;
+    if (server) {
+      server.identity.instanceId = processInstanceId(5501, this.creationTime);
+      await writeRuntime(this.fixture.runtimeFile, server.identity);
+    }
     return this.process();
   }
 
@@ -222,7 +274,7 @@ class FakePlatform {
   async inspect() {
     return {
       pid: 5501,
-      creationTime: "2026-09-15T17:00:00.000Z",
+      creationTime: this.creationTime,
       exe: this.fixture.gameExe,
       running: this.running,
       runtimeVersion: "1.11.240.0",
@@ -261,7 +313,7 @@ class FakePlatform {
       owned: true,
       running: this.running,
       pid: 5501,
-      creationTime: "2026-09-15T17:00:00.000Z",
+      creationTime: this.creationTime,
       exe: this.fixture.gameExe,
       mo2Pid: 5500,
     };
@@ -362,6 +414,7 @@ async function startWorkflowServer(fixture, options) {
     identity,
     loadCalls: 0,
     scenarioRunCalls: 0,
+    inspectStalls: options.inspectStalls ?? 0,
   };
   const server = createServer(async (request, response) => {
     if (request.headers["x-devbench-instance"] !== identity.instanceId) {
@@ -416,6 +469,12 @@ async function startWorkflowServer(fixture, options) {
       });
     }
     if (tool === "inspect") {
+      if (state.inspectStalls-- > 0) {
+        return json(response, {
+          code: 504,
+          error: "main-thread task did not start within 5000ms; queued task abandoned",
+        }, 504);
+      }
       return json(response, { playerLoaded: true });
     }
     if (tool === "scenario" && args.action === "run") {

@@ -1638,7 +1638,7 @@ namespace BethesdaDevBench.WindowsSession
             result["exited"] = exited;
             if (!exited)
             {
-                result["reason"] = "timeout";
+                result["reason"] = owned_.Running ? "timeout" : "launch shim still completing";
             }
             return result;
         }

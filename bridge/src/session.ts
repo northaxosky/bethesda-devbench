@@ -35,6 +35,7 @@ import {
   UncertainMutationError,
 } from "./remote.js";
 import {
+  processInstanceId,
   sameWindowsPath,
   type RuntimeIdentity,
 } from "./runtime.js";
@@ -55,6 +56,7 @@ export interface SessionTimings {
   gracefulStopTimeoutMs: number;
   pollIntervalMs: number;
   platformStartTimeoutMs: number;
+  mainThreadStallBudgetMs: number;
 }
 
 export interface SessionControllerOptions {
@@ -105,10 +107,15 @@ const DEFAULT_TIMINGS: SessionTimings = {
   startupTimeoutMs: 60_000,
   loadTimeoutMs: 180_000,
   scenarioTimeoutMs: 600_000,
-  gracefulStopTimeoutMs: 15_000,
+  // Fallout plus F4SE teardown has been observed taking ~20 s after WM_CLOSE.
+  gracefulStopTimeoutMs: 60_000,
   pollIntervalMs: 250,
   platformStartTimeoutMs: 60_000,
+  // First world frames after a load can stall the main thread for seconds.
+  mainThreadStallBudgetMs: 30_000,
 };
+
+const MAX_STALL_BACKOFF_MS = 2_000;
 
 export const SESSION_TOOL: Tool = {
   name: "devbench.session",
@@ -350,11 +357,10 @@ export class SessionController {
       await this.waitForLoadAvailability(ready, job.abort.signal, transcript);
       const eventStart = await ready.remote.events(0);
       const eventCursor = eventStart.value.headSeq;
-      const load = await invoke(
+      const load = await mutate(
         ready.remote,
         "game",
         { action: "load", name: args.fixture },
-        true,
       );
       transcript.push({ stage: "load.queued", result: load });
       const receipt = requireObject(load, "game load receipt");
@@ -381,11 +387,10 @@ export class SessionController {
         action: "run",
         async: true,
       };
-      const launched = await invoke(
+      const launched = await mutate(
         ready.remote,
         "scenario",
         scenarioArgs,
-        true,
       );
       transcript.push({ stage: "scenario.queued", result: launched });
       const launchObject = requireObject(launched, "scenario launch receipt");
@@ -437,11 +442,10 @@ export class SessionController {
           try {
             transcript.push({
               stage: "scenario.cancel",
-              result: await invoke(
+              result: await mutate(
                 ready.remote,
                 "scenario",
                 { action: "cancel", runId: this.scenarioRunId },
-                true,
               ),
             });
           } catch (cancelError) {
@@ -490,6 +494,7 @@ export class SessionController {
       );
     }
     const platform = this.getPlatform();
+    await this.dropExitedOwnership(platform);
     let process = this.ownedProcess;
     if (!process || this.ownershipReleased) {
       this.ownedProcess = undefined;
@@ -501,6 +506,7 @@ export class SessionController {
           asJsonValue(prior),
         );
       }
+      const requestedAt = Date.now();
       process = await platform.start({
         mo2Exe: config.mo2Exe,
         profilesDir: config.profilesDir,
@@ -512,7 +518,15 @@ export class SessionController {
       });
       this.ownedProcess = process;
       this.ownershipReleased = false;
+      // FILETIME and Date.now() share the system clock; allow rounding only.
+      if (Date.parse(process.creationTime) < requestedAt - 1_000) {
+        throw new WorkflowFailure(
+          "identitymismatch",
+          `platform start returned pid ${String(process.pid)} created at ${process.creationTime}, before this launch request`,
+        );
+      }
     }
+    const instanceId = processInstanceId(process.pid, process.creationTime);
     const remote = this.options.remoteFactory(config);
     const deadline = deadlineAfter(this.timings.startupTimeoutMs);
     let lastError = "DevBench did not become ready";
@@ -520,10 +534,10 @@ export class SessionController {
       throwIfAborted(signal);
       try {
         const resolved = await remote.resolve();
-        if (resolved.identity.pid !== process.pid) {
+        if (resolved.identity.instanceId !== instanceId) {
           throw new WorkflowFailure(
             "identitymismatch",
-            `runtime pid ${String(resolved.identity.pid)} does not match owned pid ${String(process.pid)}`,
+            `runtime instance ${resolved.identity.instanceId} is not the owned process ${instanceId}`,
           );
         }
         if (!sameWindowsPath(resolved.identity.exePath, config.gameExe)) {
@@ -551,12 +565,64 @@ export class SessionController {
         if (error instanceof WorkflowFailure) throw error;
         lastError = errorMessage(error);
       }
+      const owned = await platform.status();
+      if (!owned.running) {
+        throw new WorkflowFailure(
+          "launchfailed",
+          `owned game pid ${String(process.pid)} exited before DevBench became ready: ${lastError}`,
+          asJsonValue(owned),
+        );
+      }
       await delay(this.timings.pollIntervalMs, signal);
     }
     throw new WorkflowFailure(
       "launchfailed",
       `timed out waiting for DevBench health and native module identity: ${lastError}`,
     );
+  }
+
+  // A stop that timed out keeps ownership; never reuse it once the game exits.
+  private async dropExitedOwnership(platform: NativePlatform): Promise<void> {
+    if (!this.ownedProcess || this.ownershipReleased) return;
+    const status = await platform.status();
+    if (status.owned && status.running) return;
+    if (status.owned) await platform.release();
+    this.ownershipReleased = true;
+    this.logger(
+      `devbench-bridge: retained game pid ${String(this.ownedProcess.pid)} has exited; launching a new owned game`,
+    );
+  }
+
+  // Read-only observations retry main-thread stalls; mutations never retry.
+  private async observe(
+    remote: RemoteClient,
+    name: string,
+    args: JsonObject,
+    signal: AbortSignal,
+    transcript: JsonValue[],
+  ): Promise<JsonValue> {
+    const budget = deadlineAfter(this.timings.mainThreadStallBudgetMs);
+    let backoff = this.timings.pollIntervalMs;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return (await remote.callTool(name, args, { mutation: false })).value;
+      } catch (error) {
+        if (
+          !(error instanceof RemoteDomainError && error.status === 504) ||
+          budget.expired()
+        ) {
+          throw domainFailure(name, error);
+        }
+        transcript.push({
+          stage: "observe.retry",
+          tool: name,
+          attempt,
+          detail: error.body,
+        });
+      }
+      await delay(backoff, signal);
+      backoff = Math.min(backoff * 2, MAX_STALL_BACKOFF_MS);
+    }
   }
 
   private async waitForLoadAvailability(
@@ -568,7 +634,7 @@ export class SessionController {
     while (!deadline.expired()) {
       throwIfAborted(signal);
       const status = requireObject(
-        await invoke(ready.remote, "game", { action: "status" }, false),
+        await this.observe(ready.remote, "game", { action: "status" }, signal, transcript),
         "game status",
       );
       if (status.actionsAllowed !== true) {
@@ -593,11 +659,12 @@ export class SessionController {
     const deadline = deadlineAfter(this.timings.loadTimeoutMs);
     while (!deadline.expired()) {
       throwIfAborted(signal);
-      const statusValue = await invoke(
+      const statusValue = await this.observe(
         ready.remote,
         "game",
         { action: "status" },
-        false,
+        signal,
+        transcript,
       );
       const status = requireObject(statusValue, "game status");
       const operation = status.operation;
@@ -619,11 +686,12 @@ export class SessionController {
           );
         }
         if (operation.phase === "succeeded" && operation.success === true) {
-          const stateValue = await invoke(
+          const stateValue = await this.observe(
             ready.remote,
             "inspect",
             { kind: "state" },
-            false,
+            signal,
+            transcript,
           );
           const state = requireObject(stateValue, "inspect state");
           if (state.playerLoaded === true) {
@@ -651,11 +719,12 @@ export class SessionController {
     let cursor = initialCursor;
     while (!deadline.expired()) {
       throwIfAborted(signal);
-      const statusValue = await invoke(
+      const statusValue = await this.observe(
         ready.remote,
         "scenario",
         { action: "status", runId },
-        false,
+        signal,
+        transcript,
       );
       const status = requireObject(statusValue, "scenario status");
       const eventBatch = await ready.remote.events(cursor).catch((error: unknown) => {
@@ -925,24 +994,25 @@ async function parseRunArguments(args: JsonObject): Promise<RunArguments> {
   };
 }
 
-async function invoke(
+async function mutate(
   remote: RemoteClient,
   name: string,
   args: JsonObject,
-  mutation: boolean,
 ): Promise<JsonValue> {
   try {
-    return (await remote.callTool(name, args, { mutation })).value;
+    return (await remote.callTool(name, args, { mutation: true })).value;
   } catch (error) {
-    if (error instanceof RemoteDomainError) {
-      throw new WorkflowFailure(
-        name === "game" ? "loadfailed" : "scenariofailed",
-        `DevBench ${name} call failed with HTTP ${String(error.status)}`,
-        error.body,
-      );
-    }
-    throw error;
+    throw domainFailure(name, error);
   }
+}
+
+function domainFailure(name: string, error: unknown): unknown {
+  if (!(error instanceof RemoteDomainError)) return error;
+  return new WorkflowFailure(
+    name === "game" ? "loadfailed" : "scenariofailed",
+    `DevBench ${name} call failed with HTTP ${String(error.status)}`,
+    error.body,
+  );
 }
 
 function verifyNativeIdentity(

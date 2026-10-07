@@ -120,13 +120,15 @@ written to `%LOCALAPPDATA%\devbench\launch-shim.log`.
 - `start`: asynchronously launch a new game through the Windows helper and wait
   for matching runtime, process-creation, executable, loaded DLL path/hash, and
   runtime-version evidence.
-- `run`: asynchronously start or reuse only the already-owned game, load the
-  required named `fixture`, wait for the same native `operationId` to succeed
-  and for `inspect{kind:"state"}.playerLoaded`, launch a server-side scenario
-  with `async:true`, poll status and current-instance progress events, collect
-  evidence, then stop or release ownership.
-- `stop`: graceful close of the retained owned game only. `force:true` permits
-  the helper's retained-handle terminate operation after graceful timeout.
+- `run`: asynchronously start or reuse only the already-owned game while it is
+  still running, load the required named `fixture`, wait for the same native
+  `operationId` to succeed and for `inspect{kind:"state"}.playerLoaded`, launch
+  a server-side scenario with `async:true`, poll status and current-instance
+  progress events, collect evidence, then stop or release ownership. Read-only
+  polls retry HTTP 504 main-thread stalls for up to 30 s; mutations never retry.
+- `stop`: graceful close of the retained owned game only, waiting up to 60 s.
+  `force:true` permits the helper's retained-handle terminate operation after
+  graceful timeout. A timed-out stop keeps ownership until the game exits.
 - `cancel`: cooperative cancellation of the active controller job.
 
 Example run call:

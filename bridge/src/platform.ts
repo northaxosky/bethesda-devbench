@@ -147,7 +147,8 @@ export class WindowsSessionPlatform implements NativePlatform {
 
   async close(timeoutMs: number): Promise<CloseResult> {
     return parseClose(
-      await this.call("close", { timeoutMs }, timeoutMs + 5_000),
+      // The helper waits up to timeoutMs for the game, then again for its shim.
+      await this.call("close", { timeoutMs }, 2 * timeoutMs + 5_000),
     );
   }
 

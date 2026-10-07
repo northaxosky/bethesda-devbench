@@ -178,6 +178,22 @@ export function validateTargetIdentity(
   }
 }
 
+const FILETIME_UNIX_EPOCH = 116_444_736_000_000_000n;
+
+// Mirrors the plugin's MakeInstanceId so runtime.json binds to one process.
+export function processInstanceId(pid: number, creationTime: string): string {
+  const match = /^(.+T\d\d:\d\d:\d\d)(?:\.(\d{1,7}))?(Z|[+-]\d\d:\d\d)$/.exec(creationTime);
+  const seconds = match ? Date.parse(`${match[1]}${match[3]}`) : Number.NaN;
+  if (!match || Number.isNaN(seconds)) {
+    throw new Error(`invalid process creation time '${creationTime}'`);
+  }
+  const ticks =
+    BigInt(seconds) * 10_000n +
+    BigInt((match[2] ?? "").padEnd(7, "0")) +
+    FILETIME_UNIX_EPOCH;
+  return `${String(pid)}-${ticks.toString(16).toUpperCase().padStart(16, "0")}`;
+}
+
 export function sameWindowsPath(left: string, right: string): boolean {
   return normalizeWindowsPath(left) === normalizeWindowsPath(right);
 }
