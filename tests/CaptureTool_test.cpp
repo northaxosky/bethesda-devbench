@@ -1,4 +1,5 @@
 #include "test_framework.h"
+#include "TestTempDir.h"
 
 #include "ToolExtensions.h"
 #include "tools/capture/CaptureTool.h"
@@ -24,28 +25,6 @@ namespace
 	using dvb::tools::capture::CaptureConfiguration;
 	using dvb::tools::capture::CaptureService;
 	constexpr auto kArtifactTimeout = 2s;
-
-	class TemporaryRoot
-	{
-	public:
-		TemporaryRoot()
-		{
-			static std::atomic_uint64_t sequence{ 0 };
-			path = fs::temp_directory_path() /
-			       std::format("devbench_capture_tests_{}_{}", ::GetCurrentProcessId(), ++sequence);
-			std::error_code ec;
-			fs::remove_all(path, ec);
-			fs::create_directories(path);
-		}
-
-		~TemporaryRoot()
-		{
-			std::error_code ec;
-			fs::remove_all(path, ec);
-		}
-
-		fs::path path;
-	};
 
 	void WriteBmp24(const fs::path& a_path, int a_width = 16, int a_height = 16, bool a_invert = false)
 	{
@@ -105,7 +84,7 @@ namespace
 
 	struct Harness
 	{
-		TemporaryRoot                   root;
+		TempDir                         root{ "capture" };
 		dvb::EventBus                   events;
 		ToolRegistry                    registry;
 		std::function<bool()>           nativeAction;

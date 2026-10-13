@@ -1,4 +1,5 @@
 #include "test_framework.h"
+#include "TestTempDir.h"
 
 #include "tools/recording/RecordingModel.h"
 #include "tools/recording/RecordingTool.h"
@@ -25,27 +26,6 @@ namespace
 {
 	using namespace std::chrono_literals;
 	namespace fs = std::filesystem;
-
-	struct TempRoot
-	{
-		fs::path path = fs::temp_directory_path() /
-		                std::format(
-							"devbench_recording_test_{}",
-							std::chrono::steady_clock::now()
-								.time_since_epoch()
-								.count());
-
-		TempRoot()
-		{
-			fs::create_directories(path);
-		}
-
-		~TempRoot()
-		{
-			std::error_code ignored;
-			fs::remove_all(path, ignored);
-		}
-	};
 
 	ToolDescriptor Descriptor(std::string a_name, bool a_readOnly = false)
 	{
@@ -85,7 +65,7 @@ namespace
 
 TEST_CASE("recording storage confines paths and reports corrupt entries independently")
 {
-	TempRoot      root;
+	TempDir      root{ "recording" };
 	RecordingStore store(root.path);
 	const auto validFile = store.WriteUnique(RecordingDocument());
 	{
@@ -163,7 +143,7 @@ TEST_CASE("recording compatibility distinguishes Skyrim desktop and VR")
 
 TEST_CASE("recording atomic publication failure leaves no temporary artifact")
 {
-	TempRoot root;
+	TempDir root{ "recording" };
 	const auto blockedRoot = root.path / "not-a-directory";
 	{
 		std::ofstream file(blockedRoot, std::ios::binary);
@@ -178,7 +158,7 @@ TEST_CASE("recording atomic publication failure leaves no temporary artifact")
 
 TEST_CASE("exterior recording transitions use numeric COW through console")
 {
-	TempRoot root;
+	TempDir root{ "recording" };
 	ToolRegistry registry;
 	EventBus events;
 	ScenarioService scenarios(registry, events);
@@ -231,7 +211,7 @@ TEST_CASE("exterior recording transitions use numeric COW through console")
 
 TEST_CASE("replay accepts runtime FO4 null form identity fields")
 {
-	TempRoot root;
+	TempDir root{ "recording" };
 	RecordingStore store(root.path);
 	auto document = RecordingDocument(
 		json{
@@ -374,7 +354,7 @@ TEST_CASE("replay accepts runtime FO4 null form identity fields")
 
 TEST_CASE("missing named replay fixture never falls back to the latest save")
 {
-	TempRoot root;
+	TempDir root{ "recording" };
 	RecordingStore store(root.path);
 	const auto file = store.WriteUnique(RecordingDocument(
 		json{
@@ -431,7 +411,7 @@ TEST_CASE("missing named replay fixture never falls back to the latest save")
 
 TEST_CASE("rolling replay resolves the latest save once and loads that exact name")
 {
-	TempRoot      root;
+	TempDir      root{ "recording" };
 	RecordingStore store(root.path);
 	const auto file = store.WriteUnique(RecordingDocument(
 		json{
@@ -528,7 +508,7 @@ TEST_CASE("rolling replay resolves the latest save once and loads that exact nam
 
 TEST_CASE("active replay commands are not fed back into an active recording")
 {
-	TempRoot      root;
+	TempDir      root{ "recording" };
 	RecordingStore store(root.path);
 	const auto replayFile = store.WriteUnique(RecordingDocument(
 		json{ { "startState", "noPlayer" } },

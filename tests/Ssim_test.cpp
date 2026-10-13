@@ -4,6 +4,7 @@
 // stb_image path a real capture goes through.
 
 #include "test_framework.h"
+#include "TestTempDir.h"
 
 #include "Ssim.h"
 
@@ -25,10 +26,8 @@ namespace
 
 	fs::path TestDir()
 	{
-		const fs::path  dir = fs::temp_directory_path() / "devbench_ssim_tests";
-		std::error_code ec;
-		fs::create_directories(dir, ec);
-		return dir;
+		static const TempDir dir{ "ssim" };
+		return dir.path;
 	}
 
 	// Minimal 24bpp, uncompressed BMP writer — just enough to round-trip through stb_image's
