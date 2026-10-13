@@ -20,5 +20,12 @@
       "pattern": "crash-*.log",
       "maxBytes": 2097152
     }
-  ]
+  ],
+  "timings": {
+    "startupTimeoutMs": 30000,
+    "loadTimeoutMs": 15000,
+    "scenarioTimeoutMs": 60000,
+    "platformStartTimeoutMs": 30000,
+    "gracefulStopTimeoutMs": 30000
+  }
 }

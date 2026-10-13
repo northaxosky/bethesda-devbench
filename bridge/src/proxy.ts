@@ -10,6 +10,7 @@ import {
   type RemoteToolDescriptor,
 } from "./remote.js";
 import type { RuntimeIdentity } from "./runtime.js";
+import { callTimeoutFor } from "./timeouts.js";
 
 export interface ProxyCallResult {
   value: JsonValue;
@@ -64,9 +65,11 @@ export class RemoteProxy {
 
   async callTool(name: string, args: JsonObject): Promise<ProxyCallResult> {
     const descriptor = this.liveTools.find((tool) => tool.name === name);
+    const timeoutMs = callTimeoutFor(name, args);
     try {
       const result = await this.remote.callTool(name, args, {
         mutation: descriptor?.readOnly !== true,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       });
       this.identity = result.identity;
       return { value: result.value, isError: false };

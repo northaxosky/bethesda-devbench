@@ -39,6 +39,7 @@ import {
   sameWindowsPath,
   type RuntimeIdentity,
 } from "./runtime.js";
+import { DEFAULT_SESSION_TIMINGS, type SessionTimings } from "./timeouts.js";
 
 export type SessionPhase =
   | "launchfailed"
@@ -48,16 +49,6 @@ export type SessionPhase =
   | "cancelled"
   | "cleanupfailed"
   | "complete";
-
-export interface SessionTimings {
-  startupTimeoutMs: number;
-  loadTimeoutMs: number;
-  scenarioTimeoutMs: number;
-  gracefulStopTimeoutMs: number;
-  pollIntervalMs: number;
-  platformStartTimeoutMs: number;
-  mainThreadStallBudgetMs: number;
-}
 
 export interface SessionControllerOptions {
   config: SessionConfigProvider;
@@ -103,25 +94,15 @@ class WorkflowFailure extends Error {
   }
 }
 
-const DEFAULT_TIMINGS: SessionTimings = {
-  startupTimeoutMs: 60_000,
-  loadTimeoutMs: 180_000,
-  scenarioTimeoutMs: 600_000,
-  // Fallout plus F4SE teardown has been observed taking ~20 s after WM_CLOSE.
-  gracefulStopTimeoutMs: 60_000,
-  pollIntervalMs: 250,
-  platformStartTimeoutMs: 60_000,
-  // First world frames after a load can stall the main thread for seconds.
-  mainThreadStallBudgetMs: 30_000,
-};
-
 const MAX_STALL_BACKOFF_MS = 2_000;
 
 export const SESSION_TOOL: Tool = {
   name: "devbench.session",
   description:
     "Control one explicitly configured, controller-owned DevBench game session. " +
-    "status is always local. start/run are asynchronous and return a runId. run loads a required named fixture, waits for the correlated native operation and player readiness, runs a server-side scenario asynchronously, captures evidence, and stops or releases only the owned game. No deployment, profile edits, arbitrary commands, or adoption of pre-existing games.",
+    "status is always local. start/run are asynchronous and return a runId. run loads a required named fixture, waits for the correlated native operation and player readiness, runs a server-side scenario asynchronously, captures evidence, and stops or releases only the owned game. No deployment, profile edits, arbitrary commands, or adoption of pre-existing games. " +
+    "Bounds (defaults, configurable in session.json timings): boot to health <=30 s, fixture load <=15 s, scenario run <=60 s of scenario time, graceful stop <=30 s; in-scenario gates <=10 s and capture <=5 s by default. " +
+    "Poll status every 1-2 s. When a bound is exceeded, stop and report; do not keep waiting and do not retry a mutation.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -157,7 +138,7 @@ export const SESSION_TOOL: Tool = {
 };
 
 export class SessionController {
-  private readonly timings: SessionTimings;
+  private timings: SessionTimings;
   private readonly logger: (message: string) => void;
   private platform: NativePlatform | undefined;
   private ownedProcess: StartedProcess | undefined;
@@ -170,7 +151,7 @@ export class SessionController {
   private shuttingDown = false;
 
   constructor(private readonly options: SessionControllerOptions) {
-    this.timings = { ...DEFAULT_TIMINGS, ...options.timings };
+    this.timings = { ...DEFAULT_SESSION_TIMINGS, ...options.timings };
     this.logger = options.logger ?? ((message) => console.error(message));
   }
 
@@ -311,12 +292,22 @@ export class SessionController {
     }
   }
 
+  // Precedence: defaults, then session.json timings, then constructor options.
+  private applyConfigTimings(config: SessionConfig): void {
+    this.timings = {
+      ...DEFAULT_SESSION_TIMINGS,
+      ...config.timings,
+      ...this.options.timings,
+    };
+  }
+
   private async executeStart(job: JobRecord): Promise<JsonObject> {
     let config: SessionConfig | undefined;
     let snapshot: EvidenceSnapshot | undefined;
     let report: JsonObject;
     try {
       config = await this.options.config.load();
+      this.applyConfigTimings(config);
       snapshot = await snapshotEvidence(config);
       const ready = await this.ensureReady(config, job.abort.signal);
       report = successReport(job, ready, []);
@@ -346,6 +337,7 @@ export class SessionController {
     this.scenarioRunId = undefined;
     try {
       config = await this.options.config.load();
+      this.applyConfigTimings(config);
       snapshot = await snapshotEvidence(config);
       ready = await this.ensureReady(config, job.abort.signal);
       transcript.push(asJsonValue({

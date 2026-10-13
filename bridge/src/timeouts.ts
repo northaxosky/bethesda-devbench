@@ -1,0 +1,87 @@
+import { isObject, type JsonObject } from "./json.js";
+
+export const DEFAULT_CALL_TIMEOUT_MS = 30_000;
+// Must match the host's ScenarioConfig::maxRunTime (guarded by a test).
+export const SCENARIO_RUN_CAP_MS = 60_000;
+const CALL_MARGIN_MS = 15_000;
+
+type CallBound = (args: JsonObject) => number | undefined;
+
+function requestedTimeout(args: JsonObject): number | undefined {
+  const value = args.timeoutMs;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+// Tools whose synchronous call may legitimately outlive the default timeout.
+const CALL_BOUNDS: Readonly<Record<string, CallBound>> = {
+  scenario: (args) =>
+    (args.action ?? "run") === "run" && args.async !== true
+      ? SCENARIO_RUN_CAP_MS
+      : undefined,
+  capture: requestedTimeout,
+  papyrus: requestedTimeout,
+};
+
+/** Per-call HTTP timeout, or undefined when the default already covers it. */
+export function callTimeoutFor(
+  tool: string,
+  args: JsonObject,
+): number | undefined {
+  const bound = CALL_BOUNDS[tool]?.(args);
+  if (bound === undefined) return undefined;
+  const timeout = bound + CALL_MARGIN_MS;
+  return timeout > DEFAULT_CALL_TIMEOUT_MS ? timeout : undefined;
+}
+
+export interface SessionTimings {
+  startupTimeoutMs: number;
+  loadTimeoutMs: number;
+  scenarioTimeoutMs: number;
+  gracefulStopTimeoutMs: number;
+  pollIntervalMs: number;
+  platformStartTimeoutMs: number;
+  mainThreadStallBudgetMs: number;
+}
+
+export const DEFAULT_SESSION_TIMINGS: SessionTimings = {
+  startupTimeoutMs: 30_000,
+  loadTimeoutMs: 15_000,
+  scenarioTimeoutMs: 60_000,
+  // The launch helper rejects close timeouts above 30 s.
+  gracefulStopTimeoutMs: 30_000,
+  pollIntervalMs: 250,
+  // The launch helper rejects start timeouts above 60 s.
+  platformStartTimeoutMs: 30_000,
+  // First world frames after a load can stall the main thread for seconds.
+  mainThreadStallBudgetMs: 30_000,
+};
+
+const MAX_TIMING_MS = 3_600_000;
+const TIMING_MAXIMA: Readonly<Record<keyof SessionTimings, number>> = {
+  startupTimeoutMs: MAX_TIMING_MS,
+  loadTimeoutMs: MAX_TIMING_MS,
+  scenarioTimeoutMs: MAX_TIMING_MS,
+  gracefulStopTimeoutMs: 30_000,
+  pollIntervalMs: 60_000,
+  platformStartTimeoutMs: 60_000,
+  mainThreadStallBudgetMs: MAX_TIMING_MS,
+};
+
+/** Parses the optional session config `timings` overrides. */
+export function parseSessionTimings(value: unknown): Partial<SessionTimings> {
+  if (value === undefined) return {};
+  if (!isObject(value)) throw new Error("session config.timings must be an object");
+  const timings: Partial<SessionTimings> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!Object.hasOwn(TIMING_MAXIMA, key)) {
+      throw new Error(`session config.timings.${key} is not a known timing`);
+    }
+    const name = key as keyof SessionTimings;
+    const maximum = TIMING_MAXIMA[name];
+    if (!Number.isSafeInteger(entry) || (entry as number) < 1 || (entry as number) > maximum) {
+      throw new Error(`session config.timings.${key} must be an integer from 1 to ${String(maximum)}`);
+    }
+    timings[name] = entry as number;
+  }
+  return timings;
+}

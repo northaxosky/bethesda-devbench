@@ -10,6 +10,7 @@ import {
   requireObject,
   requireString,
 } from "./json.js";
+import { parseSessionTimings, type SessionTimings } from "./timeouts.js";
 
 export interface SessionLogSpec {
   path: string;
@@ -31,6 +32,7 @@ export interface SessionConfig {
   expectedDllSha256?: string;
   resultsDir: string;
   logs: SessionLogSpec[];
+  timings: Partial<SessionTimings>;
 }
 
 export interface SessionConfigProviderOptions {
@@ -112,6 +114,7 @@ export function parseSessionConfig(
     devbenchDll: absoluteWindowsPath(object, "devbenchDll"),
     resultsDir: absoluteWindowsPath(object, "resultsDir"),
     logs: parseLogs(object.logs),
+    timings: parseSessionTimings(object.timings),
   };
   if (win32.basename(config.gameExe).toLowerCase() !== profile.executable.toLowerCase()) {
     throw new Error(`session config.gameExe must identify ${profile.executable} for --game ${profile.id}`);
