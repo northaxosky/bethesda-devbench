@@ -126,7 +126,7 @@ written to `%LOCALAPPDATA%\devbench\launch-shim.log`.
   a server-side scenario with `async:true`, poll status and current-instance
   progress events, collect evidence, then stop or release ownership. Read-only
   polls retry HTTP 504 main-thread stalls for up to 30 s; mutations never retry.
-- `stop`: graceful close of the retained owned game only, waiting up to 30 s.
+- `stop`: graceful close of the retained owned game only, waiting up to 10 s.
   `force:true` permits the helper's retained-handle terminate operation after
   graceful timeout. A timed-out stop keeps ownership until the game exits.
 - `cancel`: cooperative cancellation of the active controller job.
@@ -162,21 +162,22 @@ not retried, and the controller performs no further automatic writes or stop.
 
 | Bound | Default | `session.json` `timings` key |
 |---|---|---|
-| Boot to health | 30 s | `startupTimeoutMs` |
-| Launch helper start | 30 s (max 60 s) | `platformStartTimeoutMs` |
-| Fixture load | 15 s | `loadTimeoutMs` |
+| Launch to health | 5 s | `healthTimeoutMs` |
+| Health to main menu (`canLoad`) | 50 s | `mainMenuTimeoutMs` |
+| Launch helper start (covers launch to health) | 10 s (max 60 s) | `platformStartTimeoutMs` |
+| Fixture load to player ready | 10 s | `loadTimeoutMs` |
 | Scenario run | 60 s | `scenarioTimeoutMs` |
-| Graceful stop | 30 s (max 30 s) | `gracefulStopTimeoutMs` |
+| Graceful stop | 10 s (max 30 s) | `gracefulStopTimeoutMs` |
 | Status poll interval | 250 ms | `pollIntervalMs` |
 | Main-thread stall retry | 30 s | `mainThreadStallBudgetMs` |
 
 In-scenario gates (`waitFor`, `waitUntil`) default to 10 s, steps and waits are
 capped at 30 s, and the host caps a whole scenario run at 60 s; capture defaults
-to 5 s. Poll `devbench.session` status every 1-2 s, never wait longer than the
+to 6 s. Poll `devbench.session` status every 1-2 s, never wait longer than the
 bound, and report instead of retrying a mutation. Synchronous `scenario` calls
 through the proxy get an HTTP timeout of the 60 s run cap plus a 15 s margin
 (requested `timeoutMs` plus margin for `capture` and `papyrus`); other calls keep
-30 s. Override keys are optional positive integers in milliseconds; slower
+30 s. The `timings` object is optional; absent keys keep these defaults. Override keys are optional positive integers in milliseconds; slower
 machines can raise them without code changes, within the helper maxima above.
 Raising `scenarioTimeoutMs` does not raise the host's 60 s run cap.
 

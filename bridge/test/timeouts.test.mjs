@@ -31,5 +31,6 @@ test("session timing overrides reject unknown keys and out-of-range values", () 
     loadTimeoutMs: 90_000,
   });
   assert.throws(() => parseSessionTimings({ loadTimeout: 1 }), /not a known timing/);
+  assert.throws(() => parseSessionTimings({ startupTimeoutMs: 1 }), /not a known timing/);
   assert.throws(() => parseSessionTimings({ gracefulStopTimeoutMs: 31_000 }), /from 1 to 30000/);
 });

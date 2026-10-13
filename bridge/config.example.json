@@ -22,10 +22,11 @@
     }
   ],
   "timings": {
-    "startupTimeoutMs": 30000,
-    "loadTimeoutMs": 15000,
+    "healthTimeoutMs": 5000,
+    "mainMenuTimeoutMs": 50000,
+    "loadTimeoutMs": 10000,
     "scenarioTimeoutMs": 60000,
-    "platformStartTimeoutMs": 30000,
-    "gracefulStopTimeoutMs": 30000
+    "platformStartTimeoutMs": 10000,
+    "gracefulStopTimeoutMs": 10000
   }
 }

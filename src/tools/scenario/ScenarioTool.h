@@ -11,6 +11,9 @@
 
 namespace dvb::tools::scenario
 {
+	// Bound for save-load gates (loading menu closed, player ready).
+	inline constexpr int kLoadGateTimeoutMs = 10000;
+
 	struct ScenarioConfig
 	{
 		std::size_t               historyLimit = 128;

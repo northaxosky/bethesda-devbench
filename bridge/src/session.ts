@@ -101,7 +101,7 @@ export const SESSION_TOOL: Tool = {
   description:
     "Control one explicitly configured, controller-owned DevBench game session. " +
     "status is always local. start/run are asynchronous and return a runId. run loads a required named fixture, waits for the correlated native operation and player readiness, runs a server-side scenario asynchronously, captures evidence, and stops or releases only the owned game. No deployment, profile edits, arbitrary commands, or adoption of pre-existing games. " +
-    "Bounds (defaults, configurable in session.json timings): boot to health <=30 s, fixture load <=15 s, scenario run <=60 s of scenario time, graceful stop <=30 s; in-scenario gates <=10 s and capture <=5 s by default. " +
+    "Bounds (defaults, configurable in session.json timings): launch to health <=5 s, health to main menu (canLoad) <=50 s, fixture load to player ready <=10 s, scenario run <=60 s of scenario time, graceful stop <=10 s; in-scenario gates <=10 s and capture <=6 s by default. " +
     "Poll status every 1-2 s. When a bound is exceeded, stop and report; do not keep waiting and do not retry a mutation.",
   inputSchema: {
     type: "object",
@@ -520,7 +520,7 @@ export class SessionController {
     }
     const instanceId = processInstanceId(process.pid, process.creationTime);
     const remote = this.options.remoteFactory(config);
-    const deadline = deadlineAfter(this.timings.startupTimeoutMs);
+    const deadline = deadlineAfter(this.timings.healthTimeoutMs);
     let lastError = "DevBench did not become ready";
     while (!deadline.expired()) {
       throwIfAborted(signal);
@@ -622,7 +622,7 @@ export class SessionController {
     signal: AbortSignal,
     transcript: JsonValue[],
   ): Promise<void> {
-    const deadline = deadlineAfter(this.timings.startupTimeoutMs);
+    const deadline = deadlineAfter(this.timings.mainMenuTimeoutMs);
     while (!deadline.expired()) {
       throwIfAborted(signal);
       const status = requireObject(

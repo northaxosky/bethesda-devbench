@@ -66,7 +66,7 @@ namespace dvb
 		// which is a different, SKSE-log-specific convention); "" means the root itself.
 		std::string              captureDir = "Data/F4SE/Plugins/devbench/captures";
 		std::vector<std::string> captureScanDirs = { "", "Screenshots" };
-		int                      captureTimeoutMs = 5000;
+		int                      captureTimeoutMs = 6000;
 		int                      captureSettleMs = 500;  // default settle before a checkpoint capture
 
 		// Background watchdog: if the engine frame counter hasn't advanced for this long,

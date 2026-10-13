@@ -34,7 +34,8 @@ export function callTimeoutFor(
 }
 
 export interface SessionTimings {
-  startupTimeoutMs: number;
+  healthTimeoutMs: number;
+  mainMenuTimeoutMs: number;
   loadTimeoutMs: number;
   scenarioTimeoutMs: number;
   gracefulStopTimeoutMs: number;
@@ -44,21 +45,23 @@ export interface SessionTimings {
 }
 
 export const DEFAULT_SESSION_TIMINGS: SessionTimings = {
-  startupTimeoutMs: 30_000,
-  loadTimeoutMs: 15_000,
+  healthTimeoutMs: 5_000,
+  mainMenuTimeoutMs: 50_000,
+  loadTimeoutMs: 10_000,
   scenarioTimeoutMs: 60_000,
   // The launch helper rejects close timeouts above 30 s.
-  gracefulStopTimeoutMs: 30_000,
+  gracefulStopTimeoutMs: 10_000,
   pollIntervalMs: 250,
-  // The launch helper rejects start timeouts above 60 s.
-  platformStartTimeoutMs: 30_000,
+  // Covers launch to health; the helper rejects start timeouts above 60 s.
+  platformStartTimeoutMs: 10_000,
   // First world frames after a load can stall the main thread for seconds.
   mainThreadStallBudgetMs: 30_000,
 };
 
 const MAX_TIMING_MS = 3_600_000;
 const TIMING_MAXIMA: Readonly<Record<keyof SessionTimings, number>> = {
-  startupTimeoutMs: MAX_TIMING_MS,
+  healthTimeoutMs: MAX_TIMING_MS,
+  mainMenuTimeoutMs: MAX_TIMING_MS,
   loadTimeoutMs: MAX_TIMING_MS,
   scenarioTimeoutMs: MAX_TIMING_MS,
   gracefulStopTimeoutMs: 30_000,

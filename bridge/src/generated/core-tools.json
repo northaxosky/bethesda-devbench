@@ -672,8 +672,8 @@
                 "type": "number"
               },
               "timeoutMs": {
-                "default": 5000,
-                "description": "capture wait bound in ms; default is captureTimeoutMs (5000 unless configured)",
+                "default": 6000,
+                "description": "capture wait bound in ms; default is captureTimeoutMs (6000 unless configured)",
                 "maximum": 60000,
                 "minimum": 1,
                 "type": "integer"
@@ -1412,8 +1412,8 @@
                 "type": "number"
               },
               "timeoutMs": {
-                "default": 5000,
-                "description": "capture wait bound in ms; default is captureTimeoutMs (5000 unless configured)",
+                "default": 6000,
+                "description": "capture wait bound in ms; default is captureTimeoutMs (6000 unless configured)",
                 "maximum": 60000,
                 "minimum": 1,
                 "type": "integer"
@@ -2152,8 +2152,8 @@
                 "type": "number"
               },
               "timeoutMs": {
-                "default": 5000,
-                "description": "capture wait bound in ms; default is captureTimeoutMs (5000 unless configured)",
+                "default": 6000,
+                "description": "capture wait bound in ms; default is captureTimeoutMs (6000 unless configured)",
                 "maximum": 60000,
                 "minimum": 1,
                 "type": "integer"

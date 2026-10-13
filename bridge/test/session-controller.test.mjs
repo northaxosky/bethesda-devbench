@@ -177,7 +177,7 @@ test("startup timeout is a launch failure with owned-process evidence and cleanu
   );
   const platform = new FakePlatform(fixture, { closeExits: true });
   const controller = createController(fixture, platform, {
-    startupTimeoutMs: 40,
+    healthTimeoutMs: 40,
     pollIntervalMs: 5,
   });
   t.after(() => controller.shutdown());
@@ -339,7 +339,8 @@ function createController(fixture, platform, timingOverrides = {}) {
         { discoveryTimeoutMs: 100, callTimeoutMs: 500 },
       ),
     timings: {
-      startupTimeoutMs: 1_000,
+      healthTimeoutMs: 1_000,
+      mainMenuTimeoutMs: 1_000,
       loadTimeoutMs: 1_000,
       scenarioTimeoutMs: 1_000,
       gracefulStopTimeoutMs: 50,
