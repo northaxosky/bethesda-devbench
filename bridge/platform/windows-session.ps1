@@ -833,8 +833,8 @@ namespace BethesdaDevBench.WindowsSession
     {
         public static string ShimScriptPath { get; set; }
         private const int MaximumLineCharacters = 1024 * 1024;
-        private const int MaximumStartTimeoutMs = 10 * 60 * 1000;
-        private const int MaximumCloseTimeoutMs = 5 * 60 * 1000;
+        private const int MaximumStartTimeoutMs = 60 * 1000;
+        private const int MaximumCloseTimeoutMs = 30 * 1000;
         private const int TerminateWaitMs = 5000;
         private Mutex lease_;
         private bool leaseHeld_;

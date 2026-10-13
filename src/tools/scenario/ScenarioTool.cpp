@@ -2409,12 +2409,16 @@ namespace dvb::tools::scenario
 			"registered readOnly tool: {{tool,args,path,eq|ne|lt|le|gt|ge|exists}}. "
 			"Only one run executes at a time. Limits: repeat<=1000, expandedSteps<={}, "
 			"wait/timeout<={}ms, run<={}ms, transcript<={} bytes, retained histories={}. "
+			"Default waitFor timeout={}ms, waitUntil timeout={}ms; a stuck gate fails at its "
+			"timeout, so report it instead of retrying. "
 			"Cancellation is cooperative and cannot undo or preempt a tool callback already running.",
 			a_config.maxExpandedSteps,
 			std::max(a_config.maxWait, a_config.maxStepTimeout).count(),
 			a_config.maxRunTime.count(),
 			a_config.maxTranscriptBytes,
-			a_config.historyLimit);
+			a_config.historyLimit,
+			a_config.defaultWaitForTimeout.count(),
+			a_config.defaultWaitUntilTimeout.count());
 		descriptor.inputSchema = json{
 			{ "type", "object" },
 			{ "additionalProperties", false },

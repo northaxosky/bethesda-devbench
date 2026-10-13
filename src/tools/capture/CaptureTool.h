@@ -25,7 +25,7 @@ namespace dvb::tools::capture
 	{
 		std::filesystem::path              captureDirectory;
 		std::vector<std::filesystem::path> scanDirectories;
-		std::chrono::milliseconds          timeout{ 8000 };
+		std::chrono::milliseconds          timeout{ 5000 };
 		std::chrono::milliseconds          settle{ 500 };
 	};
 

@@ -557,11 +557,14 @@ namespace dvb::tools::recording
 			};
 		}
 
+		// Load gates must stay within the scenario step timeout cap.
+		constexpr int kReplayGateTimeoutMs = 15000;
+
 		json TransitionWaitStep()
 		{
 			return json{
 				{ "waitFor", "loadingMenuClosed" },
-				{ "timeoutMs", 60000 },
+				{ "timeoutMs", kReplayGateTimeoutMs },
 				{ "pollMs", 100 },
 			};
 		}
@@ -570,7 +573,7 @@ namespace dvb::tools::recording
 		{
 			return json{
 				{ "waitUntil", "playerLoaded" },
-				{ "timeoutMs", 60000 },
+				{ "timeoutMs", kReplayGateTimeoutMs },
 				{ "pollMs", 100 },
 			};
 		}
@@ -1361,7 +1364,7 @@ namespace dvb::tools::recording
 										{ "success", true },
 									} },
 							} },
-						{ "timeoutMs", 60000 },
+						{ "timeoutMs", kReplayGateTimeoutMs },
 						{ "pollMs", 100 },
 						{ "acceptModal",
 							json{
@@ -1371,7 +1374,7 @@ namespace dvb::tools::recording
 					});
 					steps.push_back(json{
 						{ "waitUntil", "playerLoaded" },
-						{ "timeoutMs", 60000 },
+						{ "timeoutMs", kReplayGateTimeoutMs },
 						{ "pollMs", 100 },
 					});
 					restoration["scheduled"] = true;

@@ -178,7 +178,7 @@
           "readOnly": false
         },
         {
-          "description": "Run a validated sequence server-side and return a per-step transcript. action='run' is synchronous by default; async:true returns a runId for status/cancel. Steps use the upstream tool, wait, waitFor, waitUntil, and assert vocabulary. Tool steps dispatch through the common registry, so the target handler's permissions and validation remain authoritative. A valid result.eventCursor may refine the pre-dispatch event cursor used by the following waitFor; queued game operations are additionally correlated by operationId. pose validates all five finite values before lowering through the console tool. waitFor accepts lifecycle/menu shorthands, {topic,match}, and the narrowly gated replay missing-content modal response. waitUntil supports playerLoaded/noModal/noMenu/noBlockingMenu or a VALUE predicate; assert supports scene/noBlockingMenu or a VALUE predicate over a registered readOnly tool: {tool,args,path,eq|ne|lt|le|gt|ge|exists}. Only one run executes at a time. Limits: repeat<=1000, expandedSteps<=10000, wait/timeout<=300000ms, run<=600000ms, transcript<=4194304 bytes, retained histories=128. Cancellation is cooperative and cannot undo or preempt a tool callback already running.",
+          "description": "Run a validated sequence server-side and return a per-step transcript. action='run' is synchronous by default; async:true returns a runId for status/cancel. Steps use the upstream tool, wait, waitFor, waitUntil, and assert vocabulary. Tool steps dispatch through the common registry, so the target handler's permissions and validation remain authoritative. A valid result.eventCursor may refine the pre-dispatch event cursor used by the following waitFor; queued game operations are additionally correlated by operationId. pose validates all five finite values before lowering through the console tool. waitFor accepts lifecycle/menu shorthands, {topic,match}, and the narrowly gated replay missing-content modal response. waitUntil supports playerLoaded/noModal/noMenu/noBlockingMenu or a VALUE predicate; assert supports scene/noBlockingMenu or a VALUE predicate over a registered readOnly tool: {tool,args,path,eq|ne|lt|le|gt|ge|exists}. Only one run executes at a time. Limits: repeat<=1000, expandedSteps<=10000, wait/timeout<=30000ms, run<=60000ms, transcript<=4194304 bytes, retained histories=128. Default waitFor timeout=10000ms, waitUntil timeout=10000ms; a stuck gate fails at its timeout, so report it instead of retrying. Cancellation is cooperative and cannot undo or preempt a tool callback already running.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -672,6 +672,8 @@
                 "type": "number"
               },
               "timeoutMs": {
+                "default": 5000,
+                "description": "capture wait bound in ms; default is captureTimeoutMs (5000 unless configured)",
                 "maximum": 60000,
                 "minimum": 1,
                 "type": "integer"
@@ -916,7 +918,7 @@
           "readOnly": false
         },
         {
-          "description": "Run a validated sequence server-side and return a per-step transcript. action='run' is synchronous by default; async:true returns a runId for status/cancel. Steps use the upstream tool, wait, waitFor, waitUntil, and assert vocabulary. Tool steps dispatch through the common registry, so the target handler's permissions and validation remain authoritative. A valid result.eventCursor may refine the pre-dispatch event cursor used by the following waitFor; queued game operations are additionally correlated by operationId. pose validates all five finite values before lowering through the console tool. waitFor accepts lifecycle/menu shorthands, {topic,match}, and the narrowly gated replay missing-content modal response. waitUntil supports playerLoaded/noModal/noMenu/noBlockingMenu or a VALUE predicate; assert supports scene/noBlockingMenu or a VALUE predicate over a registered readOnly tool: {tool,args,path,eq|ne|lt|le|gt|ge|exists}. Only one run executes at a time. Limits: repeat<=1000, expandedSteps<=10000, wait/timeout<=300000ms, run<=600000ms, transcript<=4194304 bytes, retained histories=128. Cancellation is cooperative and cannot undo or preempt a tool callback already running.",
+          "description": "Run a validated sequence server-side and return a per-step transcript. action='run' is synchronous by default; async:true returns a runId for status/cancel. Steps use the upstream tool, wait, waitFor, waitUntil, and assert vocabulary. Tool steps dispatch through the common registry, so the target handler's permissions and validation remain authoritative. A valid result.eventCursor may refine the pre-dispatch event cursor used by the following waitFor; queued game operations are additionally correlated by operationId. pose validates all five finite values before lowering through the console tool. waitFor accepts lifecycle/menu shorthands, {topic,match}, and the narrowly gated replay missing-content modal response. waitUntil supports playerLoaded/noModal/noMenu/noBlockingMenu or a VALUE predicate; assert supports scene/noBlockingMenu or a VALUE predicate over a registered readOnly tool: {tool,args,path,eq|ne|lt|le|gt|ge|exists}. Only one run executes at a time. Limits: repeat<=1000, expandedSteps<=10000, wait/timeout<=30000ms, run<=60000ms, transcript<=4194304 bytes, retained histories=128. Default waitFor timeout=10000ms, waitUntil timeout=10000ms; a stuck gate fails at its timeout, so report it instead of retrying. Cancellation is cooperative and cannot undo or preempt a tool callback already running.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -1410,6 +1412,8 @@
                 "type": "number"
               },
               "timeoutMs": {
+                "default": 5000,
+                "description": "capture wait bound in ms; default is captureTimeoutMs (5000 unless configured)",
                 "maximum": 60000,
                 "minimum": 1,
                 "type": "integer"
@@ -1653,7 +1657,7 @@
           "readOnly": false
         },
         {
-          "description": "Run a validated sequence server-side and return a per-step transcript. action='run' is synchronous by default; async:true returns a runId for status/cancel. Steps use the upstream tool, wait, waitFor, waitUntil, and assert vocabulary. Tool steps dispatch through the common registry, so the target handler's permissions and validation remain authoritative. A valid result.eventCursor may refine the pre-dispatch event cursor used by the following waitFor; queued game operations are additionally correlated by operationId. pose validates all five finite values before lowering through the console tool. waitFor accepts lifecycle/menu shorthands, {topic,match}, and the narrowly gated replay missing-content modal response. waitUntil supports playerLoaded/noModal/noMenu/noBlockingMenu or a VALUE predicate; assert supports scene/noBlockingMenu or a VALUE predicate over a registered readOnly tool: {tool,args,path,eq|ne|lt|le|gt|ge|exists}. Only one run executes at a time. Limits: repeat<=1000, expandedSteps<=10000, wait/timeout<=300000ms, run<=600000ms, transcript<=4194304 bytes, retained histories=128. Cancellation is cooperative and cannot undo or preempt a tool callback already running.",
+          "description": "Run a validated sequence server-side and return a per-step transcript. action='run' is synchronous by default; async:true returns a runId for status/cancel. Steps use the upstream tool, wait, waitFor, waitUntil, and assert vocabulary. Tool steps dispatch through the common registry, so the target handler's permissions and validation remain authoritative. A valid result.eventCursor may refine the pre-dispatch event cursor used by the following waitFor; queued game operations are additionally correlated by operationId. pose validates all five finite values before lowering through the console tool. waitFor accepts lifecycle/menu shorthands, {topic,match}, and the narrowly gated replay missing-content modal response. waitUntil supports playerLoaded/noModal/noMenu/noBlockingMenu or a VALUE predicate; assert supports scene/noBlockingMenu or a VALUE predicate over a registered readOnly tool: {tool,args,path,eq|ne|lt|le|gt|ge|exists}. Only one run executes at a time. Limits: repeat<=1000, expandedSteps<=10000, wait/timeout<=30000ms, run<=60000ms, transcript<=4194304 bytes, retained histories=128. Default waitFor timeout=10000ms, waitUntil timeout=10000ms; a stuck gate fails at its timeout, so report it instead of retrying. Cancellation is cooperative and cannot undo or preempt a tool callback already running.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -2148,6 +2152,8 @@
                 "type": "number"
               },
               "timeoutMs": {
+                "default": 5000,
+                "description": "capture wait bound in ms; default is captureTimeoutMs (5000 unless configured)",
                 "maximum": 60000,
                 "minimum": 1,
                 "type": "integer"

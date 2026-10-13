@@ -16,12 +16,12 @@ namespace dvb::tools::scenario
 		std::size_t               historyLimit = 128;
 		std::size_t               maxExpandedSteps = 10000;
 		std::size_t               maxTranscriptBytes = 4 * 1024 * 1024;
-		std::chrono::milliseconds maxRunTime{ 10 * 60 * 1000 };
-		std::chrono::milliseconds maxStepTimeout{ 5 * 60 * 1000 };
-		std::chrono::milliseconds maxWait{ 5 * 60 * 1000 };
+		std::chrono::milliseconds maxRunTime{ 60 * 1000 };
+		std::chrono::milliseconds maxStepTimeout{ 30 * 1000 };
+		std::chrono::milliseconds maxWait{ 30 * 1000 };
 		std::chrono::milliseconds maxPoll{ 10 * 1000 };
-		std::chrono::milliseconds defaultWaitForTimeout{ 60 * 1000 };
-		std::chrono::milliseconds defaultWaitUntilTimeout{ 30 * 1000 };
+		std::chrono::milliseconds defaultWaitForTimeout{ 10 * 1000 };
+		std::chrono::milliseconds defaultWaitUntilTimeout{ 10 * 1000 };
 		std::chrono::milliseconds defaultWaitForPoll{ 100 };
 		std::chrono::milliseconds defaultWaitUntilPoll{ 250 };
 	};
