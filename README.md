@@ -86,6 +86,14 @@ identity are mirrored at `%LOCALAPPDATA%\devbench\<fo4|se|vr>\runtime.json`.
 - Never close MO2 before the game and its launch shim exit and RootBuilder
   cleanup completes.
 
+## Timeouts
+
+Defaults, tightened so a stuck gate fails fast: boot to health <=30 s, fixture load
+<=15 s, scenario run <=60 s (steps and waits <=30 s each), capture <=5 s, other
+gates <=10 s, graceful stop <=30 s. Poll status every 1-2 s, never wait longer than
+the bound, and report instead of retrying a mutation. Slower machines raise the
+session bounds with `timings` in `session.json` (see `bridge/README.md`).
+
 ## Source
 
 `shared` retains the upstream v1.17.0 (`afd0f3d`) shared sources unchanged.
