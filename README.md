@@ -88,11 +88,8 @@ identity are mirrored at `%LOCALAPPDATA%\devbench\<fo4|se|vr>\runtime.json`.
 
 ## Timeouts
 
-Defaults, tightened so a stuck gate fails fast: launch to health <=5 s,
-health to main menu <=50 s, fixture load <=10 s, scenario run <=60 s (steps and
-waits <=30 s each), capture <=6 s, other gates <=10 s, graceful stop <=10 s. Poll status every 1-2 s, never wait longer than
-the bound, and report instead of retrying a mutation. Slower machines raise the
-session bounds with `timings` in `session.json` (see `bridge/README.md`).
+Every wait has a short bound; see the [bridge timeout table](bridge/README.md#timeouts)
+for the values, the polling rule, and the `session.json` overrides.
 
 ## Source
 
