@@ -561,7 +561,6 @@ namespace dvb::tools::recording
 		{
 			return json{
 				{ "waitFor", "loadingMenuClosed" },
-				{ "timeoutMs", scenario::kLoadGateTimeoutMs },
 				{ "pollMs", 100 },
 			};
 		}
@@ -570,7 +569,6 @@ namespace dvb::tools::recording
 		{
 			return json{
 				{ "waitUntil", "playerLoaded" },
-				{ "timeoutMs", scenario::kLoadGateTimeoutMs },
 				{ "pollMs", 100 },
 			};
 		}
@@ -1361,7 +1359,6 @@ namespace dvb::tools::recording
 										{ "success", true },
 									} },
 							} },
-						{ "timeoutMs", scenario::kLoadGateTimeoutMs },
 						{ "pollMs", 100 },
 						{ "acceptModal",
 							json{
@@ -1371,7 +1368,6 @@ namespace dvb::tools::recording
 					});
 					steps.push_back(json{
 						{ "waitUntil", "playerLoaded" },
-						{ "timeoutMs", scenario::kLoadGateTimeoutMs },
 						{ "pollMs", 100 },
 					});
 					restoration["scheduled"] = true;

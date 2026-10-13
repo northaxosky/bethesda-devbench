@@ -11,8 +11,7 @@
 
 namespace dvb::tools::scenario
 {
-	// Bound for save-load gates (loading menu closed, player ready).
-	inline constexpr int kLoadGateTimeoutMs = 10000;
+	inline constexpr std::chrono::milliseconds kDefaultGateTimeoutMs{ 10 * 1000 };
 
 	struct ScenarioConfig
 	{
@@ -23,8 +22,8 @@ namespace dvb::tools::scenario
 		std::chrono::milliseconds maxStepTimeout{ 30 * 1000 };
 		std::chrono::milliseconds maxWait{ 30 * 1000 };
 		std::chrono::milliseconds maxPoll{ 10 * 1000 };
-		std::chrono::milliseconds defaultWaitForTimeout{ 10 * 1000 };
-		std::chrono::milliseconds defaultWaitUntilTimeout{ 10 * 1000 };
+		std::chrono::milliseconds defaultWaitForTimeout{ kDefaultGateTimeoutMs };
+		std::chrono::milliseconds defaultWaitUntilTimeout{ kDefaultGateTimeoutMs };
 		std::chrono::milliseconds defaultWaitForPoll{ 100 };
 		std::chrono::milliseconds defaultWaitUntilPoll{ 250 };
 	};

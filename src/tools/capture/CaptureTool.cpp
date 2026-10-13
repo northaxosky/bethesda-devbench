@@ -1320,7 +1320,7 @@ namespace dvb::tools::capture
 								{ "cleanup", json{ { "type", "boolean" }, { "default", false },
 												 { "description", "accepted for upstream compatibility; native relocation always leaves one canonical artifact" } } },
 								{ "timeoutMs", json{ { "type", "integer" }, { "minimum", 1 }, { "maximum", 60000 }, { "default", CaptureConfiguration{}.timeout.count() },
-												   { "description", "capture wait bound in ms; default is captureTimeoutMs (6000 unless configured)" } } },
+												   { "description", std::format("capture wait bound in ms; default is captureTimeoutMs ({} unless configured)", kDefaultCaptureTimeoutMs) } } },
 								{ "pollMs", json{ { "type", "integer" }, { "minimum", 10 }, { "maximum", 1000 } } },
 								{ "subrect", json{ { "type", "object" },
 												 { "description", "provider request {x,y,w,h} in normalized 0..1 UV" } } },

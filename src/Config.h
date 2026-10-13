@@ -7,6 +7,8 @@
 
 namespace dvb
 {
+	inline constexpr int kDefaultCaptureTimeoutMs = 6000;
+
 	// Headless startup config (devbench has no in-game menu yet). Read once at
 	// kPostLoad, before the server starts. Bind address is intentionally fixed to
 	// 127.0.0.1 and not configurable.
@@ -66,7 +68,7 @@ namespace dvb
 		// which is a different, SKSE-log-specific convention); "" means the root itself.
 		std::string              captureDir = "Data/F4SE/Plugins/devbench/captures";
 		std::vector<std::string> captureScanDirs = { "", "Screenshots" };
-		int                      captureTimeoutMs = 6000;
+		int                      captureTimeoutMs = kDefaultCaptureTimeoutMs;
 		int                      captureSettleMs = 500;  // default settle before a checkpoint capture
 
 		// Background watchdog: if the engine frame counter hasn't advanced for this long,

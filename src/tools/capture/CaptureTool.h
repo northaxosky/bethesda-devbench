@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Config.h"
 #include "EventBus.h"
 #include "ToolRegistry.h"
 
@@ -8,11 +9,6 @@
 #include <functional>
 #include <memory>
 #include <vector>
-
-namespace dvb
-{
-	struct Config;
-}
 
 namespace dvb::tools::capture
 {
@@ -25,7 +21,7 @@ namespace dvb::tools::capture
 	{
 		std::filesystem::path              captureDirectory;
 		std::vector<std::filesystem::path> scanDirectories;
-		std::chrono::milliseconds          timeout{ 6000 };
+		std::chrono::milliseconds          timeout{ kDefaultCaptureTimeoutMs };
 		std::chrono::milliseconds          settle{ 500 };
 	};
 
