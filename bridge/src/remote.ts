@@ -14,6 +14,7 @@ import {
   type RuntimeIdentity,
   type RuntimeTarget,
 } from "./runtime.js";
+import { DEFAULT_CALL_TIMEOUT_MS } from "./timeouts.js";
 
 export interface RemoteToolDescriptor {
   name: string;
@@ -74,7 +75,7 @@ interface FetchJsonOptions {
 export class RemoteClient {
   private pinnedIdentity?: RuntimeIdentity;
   private readonly discoveryTimeoutMs: number;
-  private readonly callTimeoutMs: number;
+  readonly callTimeoutMs: number;
   private readonly fetchImplementation: typeof fetch;
 
   constructor(
@@ -82,7 +83,7 @@ export class RemoteClient {
     options: RemoteClientOptions = {},
   ) {
     this.discoveryTimeoutMs = options.discoveryTimeoutMs ?? 2_000;
-    this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
+    this.callTimeoutMs = options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
     this.fetchImplementation = options.fetchImplementation ?? fetch;
   }
 

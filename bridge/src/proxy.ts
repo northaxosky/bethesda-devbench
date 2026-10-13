@@ -65,7 +65,7 @@ export class RemoteProxy {
 
   async callTool(name: string, args: JsonObject): Promise<ProxyCallResult> {
     const descriptor = this.liveTools.find((tool) => tool.name === name);
-    const timeoutMs = callTimeoutFor(name, args);
+    const timeoutMs = callTimeoutFor(name, args, this.remote.callTimeoutMs);
     try {
       const result = await this.remote.callTool(name, args, {
         mutation: descriptor?.readOnly !== true,

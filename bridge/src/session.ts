@@ -39,7 +39,11 @@ import {
   sameWindowsPath,
   type RuntimeIdentity,
 } from "./runtime.js";
-import { DEFAULT_SESSION_TIMINGS, type SessionTimings } from "./timeouts.js";
+import {
+  DEFAULT_SESSION_TIMINGS,
+  sessionBoundsDescription,
+  type SessionTimings,
+} from "./timeouts.js";
 
 export type SessionPhase =
   | "launchfailed"
@@ -101,8 +105,7 @@ export const SESSION_TOOL: Tool = {
   description:
     "Control one explicitly configured, controller-owned DevBench game session. " +
     "status is always local. start/run are asynchronous and return a runId. run loads a required named fixture, waits for the correlated native operation and player readiness, runs a server-side scenario asynchronously, captures evidence, and stops or releases only the owned game. No deployment, profile edits, arbitrary commands, or adoption of pre-existing games. " +
-    "Bounds (defaults, configurable in session.json timings): launch to health <=5 s, health to main menu (canLoad) <=50 s, fixture load to player ready <=10 s, scenario run <=60 s of scenario time, graceful stop <=10 s; in-scenario gates <=10 s and capture <=6 s by default. " +
-    "Poll status every 1-2 s. When a bound is exceeded, stop and report; do not keep waiting and do not retry a mutation.",
+    sessionBoundsDescription(),
   inputSchema: {
     type: "object",
     additionalProperties: false,

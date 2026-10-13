@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import test from "node:test";
 
+import { TIMING_MAXIMA } from "../dist/timeouts.js";
+
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const bridgeDirectory = path.dirname(testDirectory);
 const packagedPlatform = path.join(bridgeDirectory, "dist", "platform");
@@ -444,6 +446,25 @@ test("rejects profile traversal before launching anything", async () => {
       readFile(path.join(temporaryDirectory, "mo2.pid"), "utf8"),
       { code: "ENOENT" },
     );
+  } finally {
+    await helper.dispose();
+  }
+});
+
+test("helper timeout maxima match the bridge's configurable maxima", async () => {
+  await resetFixture();
+  const helper = new HelperClient();
+  try {
+    const start = await helper.request(
+      startRequest(21, TIMING_MAXIMA.platformStartTimeoutMs + 1),
+    );
+    assert.equal(start.error.code, "INVALID_TIMEOUT");
+    const close = await helper.request({
+      id: 22,
+      op: "close",
+      timeoutMs: TIMING_MAXIMA.gracefulStopTimeoutMs + 1,
+    });
+    assert.equal(close.error.code, "INVALID_TIMEOUT");
   } finally {
     await helper.dispose();
   }
