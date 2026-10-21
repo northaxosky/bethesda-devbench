@@ -839,7 +839,10 @@ namespace BethesdaDevBench.WindowsSession
         private Mutex lease_;
         private bool leaseHeld_;
         private string leaseGameImage_;
+        private const int UnresolvedSettleMs = 10 * 1000;
         private bool unresolvedLaunchAttempt_;
+        private long unresolvedDeadline_;
+        private string unresolvedLoaderImage_;
         private OwnedSession owned_;
 
         public Controller()
@@ -1381,6 +1384,20 @@ namespace BethesdaDevBench.WindowsSession
             }
         }
 
+        // The shim refuses to launch past its deadline, so a quiet machine is safe.
+        private void ResolveExpiredLaunchAttempt()
+        {
+            if (!unresolvedLaunchAttempt_ || owned_ != null ||
+                DateTime.UtcNow.ToFileTimeUtc() < unresolvedDeadline_)
+                return;
+            string shim = Path.Combine(Path.GetDirectoryName(ShimScriptPath), "devbench-launch.exe");
+            if (WindowsProcess.FindExactImage(leaseGameImage_).Count != 0 ||
+                WindowsProcess.FindExactImage(unresolvedLoaderImage_).Count != 0 ||
+                WindowsProcess.FindExactImage(shim).Count != 0)
+                return;
+            ReleaseLease();
+        }
+
         private object Start(Dictionary<string, object> request)
         {
             RefreshOwned();
@@ -1390,11 +1407,12 @@ namespace BethesdaDevBench.WindowsSession
                     "OWNED_GAME_ALREADY_RUNNING",
                     "This helper already owns a running game process.");
             }
+            ResolveExpiredLaunchAttempt();
             if (unresolvedLaunchAttempt_ || leaseHeld_)
             {
                 throw new BoundaryException(
                     "UNRESOLVED_LAUNCH_ATTEMPT",
-                    "Release this helper after the prior unowned launch attempt before starting again.");
+                    "A prior launch attempt may still start an unowned game; retry after its deadline once no game, loader, or shim is running.");
             }
             if (owned_ != null)
             {
@@ -1458,6 +1476,8 @@ namespace BethesdaDevBench.WindowsSession
 
                 launched = true;
                 unresolvedLaunchAttempt_ = true;
+                unresolvedDeadline_ = DateTime.UtcNow.AddMilliseconds(timeoutMs + UnresolvedSettleMs).ToFileTimeUtc();
+                unresolvedLoaderImage_ = Path.GetFullPath(loader);
                 owned_ = LaunchShim.Start(mo2Image, profile, executable, gameImage, loader, timeoutMs);
                 unresolvedLaunchAttempt_ = false;
                 RefreshOwned();
@@ -1467,7 +1487,7 @@ namespace BethesdaDevBench.WindowsSession
             {
                 throw new BoundaryException("START_TIMEOUT",
                     "The non-admin shim did not complete ownership transfer before timeout. " +
-                    "No unowned process was adopted or terminated; release the controller before another launch.");
+                    "No unowned process was adopted or terminated; another launch waits for this attempt's deadline.");
             }
             catch
             {

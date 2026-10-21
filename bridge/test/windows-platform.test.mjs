@@ -749,3 +749,43 @@ test("EOF releases broker handles while the shim keeps MO2 and the synthetic gam
     await existingExit;
   }
 });
+
+test("a timed-out launch frees the lease once its deadline passes quietly", async () => {
+  await resetFixture(3_000);
+  const forwardPipe = path.join(temporaryDirectory, "forward.pipe");
+  let mo2 = spawn(mo2Exe, ["--serve"], { stdio: "ignore", windowsHide: true });
+  let mo2Exit = once(mo2, "exit");
+  const helper = new HelperClient();
+  try {
+    await waitForFile(forwardPipe);
+    const launchedAt = Date.now();
+    const timedOut = await helper.request(startRequest(60, 1_000), 10_000);
+    assert.equal(timedOut.ok, false, JSON.stringify(timedOut));
+    assert.equal(timedOut.error.code, "START_TIMEOUT");
+
+    const early = await helper.request(startRequest(61, 1_000), 10_000);
+    assert.equal(early.ok, false, JSON.stringify(early));
+    assert.equal(early.error.code, "UNRESOLVED_LAUNCH_ATTEMPT");
+
+    // MO2 exits after the late shim refuses its expired authorization.
+    await mo2Exit;
+    const settled = launchedAt + 1_000 + 10_000 + 500 - Date.now();
+    if (settled > 0) await new Promise((resolve) => setTimeout(resolve, settled));
+
+    await resetFixture();
+    mo2 = spawn(mo2Exe, ["--serve"], { stdio: "ignore", windowsHide: true });
+    mo2Exit = once(mo2, "exit");
+    await waitForFile(forwardPipe);
+    const started = await helper.request(startRequest(62), 20_000);
+    assert.equal(started.ok, true, JSON.stringify(started));
+    const stopped = await helper.request({ id: 63, op: "terminate" });
+    assert.equal(stopped.ok, true, JSON.stringify(stopped));
+    await mo2Exit;
+  } finally {
+    await helper.dispose();
+    if (mo2.exitCode === null) {
+      mo2.kill();
+      await mo2Exit;
+    }
+  }
+});
