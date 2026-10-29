@@ -126,9 +126,12 @@ written to `%LOCALAPPDATA%\devbench\launch-shim.log`.
   a server-side scenario with `async:true`, poll status and current-instance
   progress events, collect evidence, then stop or release ownership. Read-only
   polls retry HTTP 504 main-thread stalls for up to 30 s; mutations never retry.
-- `stop`: graceful close of the retained owned game only, waiting up to 10 s.
+- `stop`: graceful close of the owned game, waiting up to 10 s.
   `force:true` permits the helper's retained-handle terminate operation after
-  graceful timeout. A timed-out stop keeps ownership until the game exits.
+  graceful timeout, including after an uncertain mutation. A timed-out stop keeps
+  ownership until the game exits. Without a retained game, `stop` reclaims one an
+  earlier bridge launched and never released (recorded under
+  `%LOCALAPPDATA%\devbench\owned\`).
 - `cancel`: cooperative cancellation of the active controller job.
 
 Example run call:
@@ -156,7 +159,8 @@ Exactly one of `steps` or `scenarioFile` is required. `finish` defaults to
 `stop`; `leave-running` calls the helper's `release` operation, after which this
 controller refuses to adopt or stop that process. If a mutation response is
 lost or times out, the report says the outcome is uncertain, the mutation is
-not retried, and the controller performs no further automatic writes or stop.
+not retried, and the controller performs no further automatic writes or stop
+until a `stop` with `force:true` ends the game.
 
 ### Timeouts
 

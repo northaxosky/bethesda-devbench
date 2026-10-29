@@ -104,7 +104,7 @@ export const SESSION_TOOL: Tool = {
   name: "devbench.session",
   description:
     "Control one explicitly configured, controller-owned DevBench game session. " +
-    "status is always local. start/run are asynchronous and return a runId. run loads a required named fixture, waits for the correlated native operation and player readiness, runs a server-side scenario asynchronously, captures evidence, and stops or releases only the owned game. No deployment, profile edits, arbitrary commands, or adoption of pre-existing games. " +
+    "status is always local. start/run are asynchronous and return a runId. run loads a required named fixture, waits for the correlated native operation and player readiness, runs a server-side scenario asynchronously, captures evidence, and stops or releases only the owned game. stop also reclaims a game an earlier bridge launched and never released; force:true terminates it after the graceful timeout, even after an uncertain mutation. No deployment, profile edits, arbitrary commands, or adoption of other games. " +
     sessionBoundsDescription(),
   inputSchema: {
     type: "object",
@@ -257,7 +257,7 @@ export class SessionController {
     }
     if (this.uncertainWrite) {
       throw new Error(
-        "a previous remote mutation has an uncertain outcome; no further writes are allowed until the bridge is restarted and the operator verifies game state",
+        "a previous remote mutation has an uncertain outcome; verify the game, then end it with stop force:true before further writes",
       );
     }
     const now = new Date().toISOString();
@@ -463,7 +463,7 @@ export class SessionController {
           skipped: true,
           reason:
             this.shuttingDown
-              ? "bridge shutdown released ownership; no further writes or automatic stop were attempted"
+              ? "bridge shut down; the game stays reclaimable by a later stop and no further writes were attempted"
               : "remote mutation outcome is uncertain; no further writes or automatic stop were attempted",
         };
       }
@@ -764,17 +764,30 @@ export class SessionController {
     if (this.shuttingDown) {
       throw new Error("the session controller is shutting down");
     }
-    if (this.ownershipReleased || !this.ownedProcess || !this.platform) {
+    if (this.ownershipReleased || !this.ownedProcess) await this.reclaim();
+    if (this.uncertainWrite && !force) {
       throw new Error(
-        "session.stop refused: this controller does not own a retained game process",
+        "session.stop refused after an uncertain remote mutation; verify the game, then pass force:true to close it anyway",
       );
     }
-    if (this.uncertainWrite) {
+    const result = await this.cleanup(force);
+    if (result.exited === true) this.uncertainWrite = false;
+    return result;
+  }
+
+  // Only a game an earlier bridge launched and never released is adopted.
+  private async reclaim(): Promise<void> {
+    const config = await this.options.config.load();
+    this.applyConfigTimings(config);
+    try {
+      this.ownedProcess = await this.getPlatform().reclaim(config.gameExe);
+    } catch (error) {
       throw new Error(
-        "session.stop refused after an uncertain remote mutation; verify the game manually before deciding whether to force cleanup",
+        `session.stop refused: this controller does not own a retained game process (${errorMessage(error)})`,
+        { cause: error },
       );
     }
-    return this.cleanup(force);
+    this.ownershipReleased = false;
   }
 
   private cancel(runId: unknown): JsonObject {

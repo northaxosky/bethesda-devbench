@@ -40,6 +40,8 @@ const gameExe = path.join(temporaryDirectory, "SyntheticGame.exe");
 const profilesDir = path.join(temporaryDirectory, "profiles");
 const profile = "Synthetic Profile";
 const delayFile = path.join(temporaryDirectory, "delay-ms.txt");
+// Keeps ownership records out of the real profile.
+process.env.LOCALAPPDATA = path.join(temporaryDirectory, "local");
 
 function availablePowerShell() {
   const candidates = [
@@ -743,6 +745,69 @@ test("EOF releases broker handles while the shim keeps MO2 and the synthetic gam
     process.kill(started.result.pid);
   } finally {
     await inspector.dispose();
+    await helper.dispose();
+    await stopMarkedSyntheticGame();
+    if (existing.exitCode === null) existing.kill();
+    await existingExit;
+  }
+});
+
+test("a fresh helper reclaims and terminates a game its predecessor never released", async () => {
+  await resetFixture();
+  const existing = spawn(mo2Exe, ["--serve"], { stdio: "ignore", windowsHide: true });
+  const existingExit = once(existing, "exit");
+  await waitForFile(path.join(temporaryDirectory, "forward.pipe"));
+  const helper = new HelperClient();
+  const successor = new HelperClient();
+  try {
+    const started = await helper.request(startRequest(70), 20_000);
+    assert.equal(started.ok, true, JSON.stringify(started));
+    assert.equal((await helper.closeInput()).code, 0);
+
+    const blocked = await successor.request(startRequest(71, 2_000), 10_000);
+    assert.equal(blocked.ok, false, JSON.stringify(blocked));
+    assert.equal(blocked.error.code, "RECLAIMABLE_GAME_RUNNING");
+
+    const reclaimed = await successor.request({ id: 72, op: "reclaim", gameExe });
+    assert.equal(reclaimed.ok, true, JSON.stringify(reclaimed));
+    assert.equal(reclaimed.result.pid, started.result.pid);
+    assert.equal(reclaimed.result.creationTime, started.result.creationTime);
+
+    const terminated = await successor.request({ id: 73, op: "terminate" });
+    assert.equal(terminated.ok, true, JSON.stringify(terminated));
+    assert.equal(terminated.result.exited, true);
+
+    const gone = await successor.request({ id: 74, op: "reclaim", gameExe });
+    assert.equal(gone.ok, false, JSON.stringify(gone));
+    assert.equal(gone.error.code, "NO_RECLAIMABLE_GAME");
+  } finally {
+    await successor.dispose();
+    await helper.dispose();
+    await stopMarkedSyntheticGame();
+    if (existing.exitCode === null) existing.kill();
+    await existingExit;
+  }
+});
+
+test("a released game is never reclaimed", async () => {
+  await resetFixture();
+  const existing = spawn(mo2Exe, ["--serve"], { stdio: "ignore", windowsHide: true });
+  const existingExit = once(existing, "exit");
+  await waitForFile(path.join(temporaryDirectory, "forward.pipe"));
+  const helper = new HelperClient();
+  const successor = new HelperClient();
+  try {
+    const started = await helper.request(startRequest(80), 20_000);
+    assert.equal(started.ok, true, JSON.stringify(started));
+    const released = await helper.request({ id: 81, op: "release" });
+    assert.equal(released.ok, true, JSON.stringify(released));
+    assert.equal((await helper.closeInput()).code, 0);
+
+    const refused = await successor.request({ id: 82, op: "reclaim", gameExe });
+    assert.equal(refused.ok, false, JSON.stringify(refused));
+    assert.equal(refused.error.code, "NO_RECLAIMABLE_GAME");
+  } finally {
+    await successor.dispose();
     await helper.dispose();
     await stopMarkedSyntheticGame();
     if (existing.exitCode === null) existing.kill();

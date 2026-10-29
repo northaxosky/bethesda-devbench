@@ -66,6 +66,8 @@ export interface NativePlatform {
   close(timeoutMs: number): Promise<CloseResult>;
   terminate(): Promise<CloseResult>;
   release(): Promise<void>;
+  // Retakes a game an earlier helper launched and exited without releasing.
+  reclaim(gameExe: string): Promise<StartedProcess>;
   shutdown(): Promise<void>;
 }
 
@@ -161,14 +163,19 @@ export class WindowsSessionPlatform implements NativePlatform {
     await this.call("release", {}, this.defaultTimeoutMs);
   }
 
-  async shutdown(): Promise<void> {
-    if (this.closed) return;
-    try {
-      await this.release();
-    } finally {
+  async reclaim(gameExe: string): Promise<StartedProcess> {
+    return parseStarted(
+      await this.call("reclaim", { gameExe }, this.defaultTimeoutMs),
+    );
+  }
+
+  // Exiting without release keeps a running game reclaimable by the next bridge.
+  shutdown(): Promise<void> {
+    if (!this.closed) {
       this.closed = true;
       this.child.stdin.end();
     }
+    return Promise.resolve();
   }
 
   private call(

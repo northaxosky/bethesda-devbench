@@ -122,6 +122,8 @@ namespace BethesdaDevBench.WindowsSession
     {
         public SafeProcessHandle Handle;
         public SafeProcessHandle ShimHandle;
+        public int ShimPid;
+        public long ShimCreationFileTime;
         public int Pid;
         public long CreationFileTime;
         public string CreationTime;
@@ -141,6 +143,153 @@ namespace BethesdaDevBench.WindowsSession
                 ShimHandle.Dispose();
                 ShimHandle = null;
             }
+        }
+    }
+
+    // Outlives the helper so a later one can reclaim a game it never released.
+    internal static class OwnerRecord
+    {
+        private static string PathFor(string canonicalGameImage)
+        {
+            string root = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+            if (String.IsNullOrEmpty(root))
+            {
+                root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            }
+            return Path.Combine(root, "devbench", "owned", Controller.ImageKey(canonicalGameImage) + ".txt");
+        }
+
+        internal static void Write(OwnedSession session)
+        {
+            string path = PathFor(session.ImagePath);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                string temporary = path + ".tmp";
+                File.WriteAllLines(temporary, new string[] {
+                    session.ImagePath,
+                    session.Pid.ToString(CultureInfo.InvariantCulture),
+                    session.CreationFileTime.ToString(CultureInfo.InvariantCulture),
+                    session.ShimPid.ToString(CultureInfo.InvariantCulture),
+                    session.ShimCreationFileTime.ToString(CultureInfo.InvariantCulture),
+                    session.Mo2Pid.ToString(CultureInfo.InvariantCulture)
+                });
+                File.Move(temporary, path, true);
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(
+                    "[windows-session] Recording game ownership failed; it cannot be reclaimed: " + exception.Message);
+            }
+        }
+
+        internal static void Delete(string canonicalGameImage)
+        {
+            try
+            {
+                File.Delete(PathFor(canonicalGameImage));
+            }
+            catch (DirectoryNotFoundException)
+            {
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(
+                    "[windows-session] Deleting the game ownership record failed: " + exception.Message);
+            }
+        }
+
+        internal static bool Matches(string canonicalGameImage, ProcessIdentity live)
+        {
+            long[] values = Read(canonicalGameImage);
+            return values != null && live != null &&
+                values[0] == live.Pid && values[1] == live.CreationFileTime;
+        }
+
+        // Exact pid and creation time prove the process is the one recorded at launch.
+        internal static OwnedSession TryOpen(string canonicalGameImage)
+        {
+            long[] values = Read(canonicalGameImage);
+            if (values == null)
+            {
+                return null;
+            }
+            ProcessIdentity recorded = new ProcessIdentity {
+                Pid = (int)values[0],
+                CreationFileTime = values[1],
+                ImagePath = canonicalGameImage
+            };
+            ProcessIdentity live = WindowsProcess.TryGetIdentity(recorded.Pid);
+            if (live == null || live.CreationFileTime != recorded.CreationFileTime ||
+                !String.Equals(live.ImagePath, canonicalGameImage, StringComparison.OrdinalIgnoreCase))
+            {
+                Delete(canonicalGameImage);
+                return null;
+            }
+
+            OwnedSession session = new OwnedSession {
+                Handle = WindowsProcess.RetainOwnedProcess(recorded),
+                Pid = recorded.Pid,
+                CreationFileTime = recorded.CreationFileTime,
+                CreationTime = WindowsProcess.ToIso(recorded.CreationFileTime),
+                ImagePath = canonicalGameImage,
+                ShimPid = (int)values[2],
+                ShimCreationFileTime = values[3],
+                Mo2Pid = (int)values[4],
+                Running = true
+            };
+            try
+            {
+                ProcessIdentity shim = WindowsProcess.TryGetIdentity(session.ShimPid);
+                string expectedShim = WindowsProcess.CanonicalizeExistingPath(
+                    Path.Combine(Path.GetDirectoryName(Controller.ShimScriptPath), "devbench-launch.exe"), false);
+                if (shim != null && shim.CreationFileTime == session.ShimCreationFileTime &&
+                    String.Equals(shim.ImagePath, expectedShim, StringComparison.OrdinalIgnoreCase))
+                {
+                    session.ShimHandle = WindowsProcess.OpenProcessHandle(
+                        shim.Pid,
+                        NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION | NativeMethods.SYNCHRONIZE,
+                        "SHIM_PROCESS_OPEN_FAILED");
+                }
+            }
+            catch
+            {
+                session.Dispose();
+                throw;
+            }
+            return session;
+        }
+
+        // Game pid, game creation, shim pid, shim creation, MO2 pid.
+        private static long[] Read(string canonicalGameImage)
+        {
+            string[] lines;
+            try
+            {
+                lines = File.ReadAllLines(PathFor(canonicalGameImage));
+            }
+            catch (FileNotFoundException)
+            {
+                return null;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return null;
+            }
+            long[] values = new long[5];
+            bool valid = lines.Length == 6 &&
+                String.Equals(lines[0], canonicalGameImage, StringComparison.OrdinalIgnoreCase);
+            for (int i = 0; valid && i < values.Length; i++)
+            {
+                valid = Int64.TryParse(lines[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out values[i]) &&
+                    (i % 2 == 1 || values[i] <= Int32.MaxValue);
+            }
+            if (!valid)
+            {
+                Delete(canonicalGameImage);
+                return null;
+            }
+            return values;
         }
     }
 
@@ -891,6 +1040,9 @@ namespace BethesdaDevBench.WindowsSession
                     case "release":
                         result = Release();
                         break;
+                    case "reclaim":
+                        result = Reclaim(request);
+                        break;
                     default:
                         throw new BoundaryException(
                             "UNKNOWN_OPERATION",
@@ -1263,7 +1415,7 @@ namespace BethesdaDevBench.WindowsSession
             return builder.ToString();
         }
 
-        private static string LeaseName(string canonicalGameImage)
+        internal static string ImageKey(string canonicalGameImage)
         {
             byte[] bytes = Encoding.UTF8.GetBytes(canonicalGameImage.ToUpperInvariant());
             using (SHA256 algorithm = SHA256.Create())
@@ -1274,8 +1426,13 @@ namespace BethesdaDevBench.WindowsSession
                 {
                     text.Append(value.ToString("x2", CultureInfo.InvariantCulture));
                 }
-                return @"Local\BethesdaDevBench.Game." + text.ToString();
+                return text.ToString();
             }
+        }
+
+        private static string LeaseName(string canonicalGameImage)
+        {
+            return @"Local\BethesdaDevBench.Game." + ImageKey(canonicalGameImage);
         }
 
         private void AcquireLease(string canonicalGameImage)
@@ -1377,11 +1534,18 @@ namespace BethesdaDevBench.WindowsSession
                 owned_.Running = false;
                 if (owned_.ShimHandle == null || !WindowsProcess.IsRunning(owned_.ShimHandle))
                 {
-                    owned_.Dispose();
-                    ReleaseLease();
+                    ForgetOwned();
                 }
                 return;
             }
+        }
+
+        // The game exited or was handed off, so no later helper may reclaim it.
+        private void ForgetOwned()
+        {
+            OwnerRecord.Delete(owned_.ImagePath);
+            owned_.Dispose();
+            ReleaseLease();
         }
 
         // The shim refuses to launch past its deadline, so a quiet machine is safe.
@@ -1445,6 +1609,12 @@ namespace BethesdaDevBench.WindowsSession
             ValidateExecutableLabel(mo2Image, executable, gameImage);
 
             List<ProcessIdentity> existingGames = WindowsProcess.FindExactImage(gameImage);
+            if (existingGames.Exists(delegate(ProcessIdentity game) { return OwnerRecord.Matches(gameImage, game); }))
+            {
+                throw new BoundaryException(
+                    "RECLAIMABLE_GAME_RUNNING",
+                    "A game launched by an earlier controller is still running; stop it first.");
+            }
             if (existingGames.Count != 0)
             {
                 throw new BoundaryException(
@@ -1480,6 +1650,7 @@ namespace BethesdaDevBench.WindowsSession
                 unresolvedLoaderImage_ = Path.GetFullPath(loader);
                 owned_ = LaunchShim.Start(mo2Image, profile, executable, gameImage, loader, timeoutMs);
                 unresolvedLaunchAttempt_ = false;
+                OwnerRecord.Write(owned_);
                 RefreshOwned();
                 return SessionResult(owned_, true);
             }
@@ -1617,8 +1788,7 @@ namespace BethesdaDevBench.WindowsSession
             owned_.Running = false;
             if (owned_.ShimHandle != null && !WindowsProcess.WaitForExit(owned_.ShimHandle, timeoutMs))
                 return false;
-            owned_.Dispose();
-            ReleaseLease();
+            ForgetOwned();
             return true;
         }
 
@@ -1696,6 +1866,45 @@ namespace BethesdaDevBench.WindowsSession
             return result;
         }
 
+        private object Reclaim(Dictionary<string, object> request)
+        {
+            RefreshOwned();
+            if ((owned_ != null && owned_.Running) || leaseHeld_)
+            {
+                throw new BoundaryException(
+                    "OWNED_GAME_ALREADY_RUNNING",
+                    "This helper already owns a game or launch attempt.");
+            }
+            if (owned_ != null)
+            {
+                owned_.Dispose();
+                owned_ = null;
+            }
+            string gameImage = ValidateFile(
+                RequireString(request, "gameExe"),
+                "gameExe",
+                "INVALID_GAME_PATH");
+            AcquireLease(gameImage);
+            try
+            {
+                owned_ = OwnerRecord.TryOpen(gameImage);
+            }
+            finally
+            {
+                if (owned_ == null)
+                {
+                    ReleaseLease();
+                }
+            }
+            if (owned_ == null)
+            {
+                throw new BoundaryException(
+                    "NO_RECLAIMABLE_GAME",
+                    "No earlier controller left this game running without releasing it.");
+            }
+            return SessionResult(owned_, true);
+        }
+
         private object Release()
         {
             RefreshOwned();
@@ -1708,7 +1917,7 @@ namespace BethesdaDevBench.WindowsSession
             {
                 result["pid"] = owned_.Pid;
                 result["running"] = owned_.Running;
-                owned_.Dispose();
+                ForgetOwned();
                 owned_ = null;
             }
             else

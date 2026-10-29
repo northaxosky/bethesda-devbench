@@ -225,6 +225,7 @@ using System.Threading;
                                 Handle = handle, Pid = pid, CreationFileTime = creation,
                                 CreationTime = WindowsProcess.ToIso(creation), ImagePath = game,
                                 Mo2Pid = mo2Pid, Running = true,
+                                ShimPid = shim.Pid, ShimCreationFileTime = shim.CreationFileTime,
                                 ShimHandle = ShimNative.Duplicate(
                                     ShimNative.GetCurrentProcess(), shimHandle.DangerousGetHandle())
                             };

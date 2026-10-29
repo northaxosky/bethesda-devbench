@@ -117,6 +117,53 @@ test("stop never adopts borrowed games and force is explicit", async (t) => {
   assert.equal(forcePlatform.terminateCalls, 1);
 });
 
+test("a new bridge reclaims and force-stops a game an earlier bridge left running", async (t) => {
+  const fixture = await createFixture(t);
+  const server = await startWorkflowServer(fixture, { scenarioOk: true });
+  t.after(() => server.close());
+  const platform = new FakePlatform(fixture, { closeExits: false, server });
+  const first = createController(fixture, platform);
+  const started = await first.handle({ action: "start" });
+  assert.equal((await waitForJob(first, started.value.runId)).job.result.ok, true);
+  await first.shutdown();
+
+  const second = createController(fixture, platform);
+  t.after(() => second.shutdown());
+  const stop = await second.handle({ action: "stop", force: true });
+  assert.equal(stop.isError, false, JSON.stringify(stop.value));
+  assert.equal(stop.value.exited, true);
+  assert.equal(stop.value.forced, true);
+  assert.equal(platform.reclaimCalls, 1);
+  assert.equal(platform.terminateCalls, 1);
+
+  const again = await second.handle({ action: "stop", force: true });
+  assert.equal(again.isError, true);
+  assert.match(again.value.reason, /does not own/);
+});
+
+test("force stops a game after an uncertain mutation and clears the uncertainty", async (t) => {
+  const fixture = await createFixture(t);
+  const server = await startWorkflowServer(fixture, { scenarioOk: true, dropLoad: true });
+  t.after(() => server.close());
+  const platform = new FakePlatform(fixture, { closeExits: true, server });
+  const controller = createController(fixture, platform);
+  t.after(() => controller.shutdown());
+  const queued = await controller.handle({
+    action: "run", fixture: "DevBenchFixture01", steps: [],
+  });
+  const status = await waitForJob(controller, queued.value.runId);
+  assert.equal(status.uncertainWrite, true, JSON.stringify(status.job.result));
+  assert.equal(platform.closeCalls, 0);
+
+  const refused = await controller.handle({ action: "stop" });
+  assert.equal(refused.isError, true);
+  assert.match(refused.value.reason, /force:true/);
+  const forced = await controller.handle({ action: "stop", force: true });
+  assert.equal(forced.isError, false, JSON.stringify(forced.value));
+  assert.equal(forced.value.exited, true);
+  assert.equal(controller.status().uncertainWrite, false);
+});
+
 test("scenario failure is not a pass and still captures fresh evidence", async (t) => {
   const fixture = await createFixture(t);
   const server = await startWorkflowServer(fixture, { scenarioOk: false });
@@ -249,12 +296,15 @@ class FakePlatform {
     this.closeCalls = 0;
     this.terminateCalls = 0;
     this.releaseCalls = 0;
+    this.reclaimCalls = 0;
+    this.recorded = false;
   }
 
   async start() {
     if (this.running) throw new Error("existing game");
     this.startCalls++;
     this.owned = true;
+    this.recorded = true;
     this.running = true;
     this.creationTime = new Date().toISOString();
     const server = this.options.server;
@@ -287,7 +337,7 @@ class FakePlatform {
 
   async close() {
     this.closeCalls++;
-    if (this.options.closeExits) this.running = false;
+    if (this.options.closeExits) this.running = this.recorded = false;
     return this.options.closeExits
       ? { exited: true, owned: true }
       : { exited: false, owned: true, reason: "timeout" };
@@ -295,17 +345,25 @@ class FakePlatform {
 
   async terminate() {
     this.terminateCalls++;
-    this.running = false;
+    this.running = this.recorded = false;
     return { exited: true, owned: true };
   }
 
   async release() {
     this.releaseCalls++;
     this.owned = false;
+    this.recorded = false;
+  }
+
+  async reclaim() {
+    if (this.owned || !this.recorded || !this.running) throw new Error("NO_RECLAIMABLE_GAME");
+    this.reclaimCalls++;
+    this.owned = true;
+    return this.process();
   }
 
   async shutdown() {
-    if (this.owned) await this.release();
+    this.owned = false;
   }
 
   process() {
@@ -450,6 +508,7 @@ async function startWorkflowServer(fixture, options) {
         return json(response, { error: "load attempted before game initialization" }, 409);
       }
       state.loadCalls++;
+      if (options.dropLoad) return request.socket.destroy();
       return json(response, {
         queued: true,
         operationId: 31,
