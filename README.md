@@ -68,6 +68,14 @@ The mutation opt-ins default to off and require a game restart:
 }
 ```
 
+Launched games start as a background window, which Windows 11 power-throttles and
+denies foreground scheduling. Two startup options, both default on, fix this:
+`foregroundOnLaunch` requests foreground once, without synthesized input, when the
+game window is first visible; `disablePowerThrottling` opts the process out of
+EcoQoS. `inspect` `kind=state` reports `window`: `foreground` (live),
+`foregroundRequested`, `foregroundResult` (`ok|failed|pending|skipped`), and
+`powerThrottlingDisabled`.
+
 Use the companion for restart-surviving MCP, or connect directly to
 `http://127.0.0.1:<port>/mcp` (defaults: FO4 8930, Skyrim 8920, VR 8921).
 REST exposes `/api/health`, `/api/tools`,
