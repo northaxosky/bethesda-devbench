@@ -22,10 +22,9 @@ namespace dvb
 		bool        allowControlActions = false;
 		bool        allowPapyrusCalls = false;
 
-		// Launched games start as a background window, which Windows 11 power-throttles
-		// and denies foreground scheduling; both keep perf measurements honest.
-		bool        foregroundOnLaunch = true;       ///< request foreground once the window is visible
-		bool        disablePowerThrottling = true;   ///< opt the process out of EcoQoS throttling
+		// Background launches get EcoQoS throttling and no foreground scheduling.
+		bool foregroundOnLaunch = true;      ///< request foreground once the window is visible
+		bool disablePowerThrottling = true;  ///< opt the process out of EcoQoS throttling
 
 		// In-game hotkeys (DXScanCode; 0 = disabled). Let recording/replay run with no
 		// MCP/REST client connected — the standalone-benchmark path. Ignored while the

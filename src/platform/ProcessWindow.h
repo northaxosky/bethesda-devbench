@@ -30,13 +30,15 @@ namespace dvb::platform
 		}
 	};
 
-	// Opts the process out of EcoQoS execution-speed and timer-resolution throttling.
+	// Opts out of EcoQoS execution-speed and timer-resolution throttling.
 	ThrottlingResult DisablePowerThrottling() noexcept;
 
 	// Never synthesizes input. Call from the thread that owns a_window.
 	ForegroundResult BringToForeground(void* a_window) noexcept;
 
 	bool IsForegroundOwnedByCurrentProcess() noexcept;
+
+	bool IsWindowVisible(void* a_window) noexcept;
 
 	// First visible, unowned top-level window of this process, or null.
 	void* FindVisibleTopLevelWindow() noexcept;

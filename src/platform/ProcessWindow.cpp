@@ -70,6 +70,11 @@ namespace dvb::platform
 		return { ForegroundOutcome::kDenied, error };
 	}
 
+	bool IsWindowVisible(void* a_window) noexcept
+	{
+		return a_window && ::IsWindowVisible(static_cast<HWND>(a_window)) != FALSE;
+	}
+
 	bool IsForegroundOwnedByCurrentProcess() noexcept
 	{
 		DWORD      pid = 0;

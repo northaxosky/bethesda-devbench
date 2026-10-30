@@ -49,7 +49,7 @@ namespace dvb::fallout4::WindowFocus
 		void RequestForeground()
 		{
 			void* const window = EngineWindow();
-			if (!window || !::IsWindowVisible(static_cast<HWND>(window)))
+			if (!platform::IsWindowVisible(window))
 			{
 				g_queued = false;
 				return;

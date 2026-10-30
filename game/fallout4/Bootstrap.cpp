@@ -94,9 +94,8 @@ namespace
 								F4SE::MessagingInterface::kPreLoadGame ?
 							"preLoadGame" :
 							"newGame");
-			}
-			if (g_host.Running())
 				dvb::fallout4::WindowFocus::OnF4SEMessage(a_message->type);
+			}
 			dvb::fallout4::Lifecycle::OnF4SEMessage(
 				a_message->type, a_message->dataLen, a_message->data);
 		}
