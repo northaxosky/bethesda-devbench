@@ -5,6 +5,7 @@
 #include "MainThread.h"
 #include "Server.h"
 #include "Version.h"
+#include "WindowFocus.h"
 #include "inspection/Form.h"
 #include "inspection/Readers.h"
 
@@ -108,6 +109,7 @@ namespace dvb::fallout4
 									   { "postLoadSucceeded", lifecycle.postLoadSucceeded ? json(*lifecycle.postLoadSucceeded) : json(nullptr) },
 									   { "lastEvent", lifecycle.lastEvent.empty() ? json(nullptr) : json(lifecycle.lastEvent) },
 								   } },
+					{ "window", WindowFocus::Snapshot() },
 					{ "frame", game::CurrentFrame() },
 				};
 				return state;

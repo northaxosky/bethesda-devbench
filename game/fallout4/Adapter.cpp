@@ -5,6 +5,7 @@
 #include "InspectBackend.h"
 #include "Lifecycle.h"
 #include "Runtime.h"
+#include "WindowFocus.h"
 #include "camera/CameraBackend.h"
 #include "capture/CaptureBackend.h"
 #include "input/InputBackend.h"
@@ -64,6 +65,10 @@ namespace dvb::fallout4
 				       state.postLoadSucceeded != false;
 			},
 			.openMenus = [] { return Lifecycle::GetSnapshot().openMenus; },
+			.onStarted =
+				[](ToolRegistry&, EventBus&, const Config& a_config) {
+					WindowFocus::Configure(a_config);
+				},
 		};
 	}
 
