@@ -57,6 +57,19 @@ TEST_CASE("config validates numeric ranges before narrowing")
 	CHECK_THROWS(dvb::ParseConfig(json{ { "captureTimeoutMs", 0 } }));
 }
 
+TEST_CASE("launch focus and throttling opt-outs default on and reject non-booleans")
+{
+	for (const char* key : { "foregroundOnLaunch", "disablePowerThrottling" })
+	{
+		CHECK(dvb::ConfigDefaults().at(key).get<bool>());
+		CHECK_THROWS(dvb::ParseConfig(json{ { key, "false" } }));
+		CHECK_THROWS(dvb::ParseConfig(json{ { key, 0 } }));
+	}
+	const auto config = dvb::ParseConfig(json{ { "foregroundOnLaunch", false } });
+	CHECK(!config.foregroundOnLaunch);
+	CHECK(config.disablePowerThrottling);
+}
+
 TEST_CASE("config validates logging and string-array types")
 {
 	CHECK(dvb::ParseConfig(json{ { "logLevel", "debug" } }).logLevel == "debug");

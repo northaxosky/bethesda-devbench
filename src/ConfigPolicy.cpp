@@ -69,6 +69,8 @@ namespace dvb
 		Read(a_document, "allowGameActions", config.allowGameActions);
 		Read(a_document, "allowControlActions", config.allowControlActions);
 		Read(a_document, "allowPapyrusCalls", config.allowPapyrusCalls);
+		Read(a_document, "foregroundOnLaunch", config.foregroundOnLaunch);
+		Read(a_document, "disablePowerThrottling", config.disablePowerThrottling);
 		Read(a_document, "port", config.port, 1, 65535);
 		Read(a_document, "logLevel", config.logLevel);
 		constexpr std::string_view kLevels[] = { "trace", "debug", "info", "warn", "error", "critical", "off" };
@@ -116,6 +118,8 @@ namespace dvb
 			{ "allowGameActions", config.allowGameActions },
 			{ "allowControlActions", config.allowControlActions },
 			{ "allowPapyrusCalls", config.allowPapyrusCalls },
+			{ "foregroundOnLaunch", config.foregroundOnLaunch },
+			{ "disablePowerThrottling", config.disablePowerThrottling },
 			{ "port", config.port },
 			{ "logLevel", config.logLevel },
 			{ "recordHotkey", config.recordHotkey },

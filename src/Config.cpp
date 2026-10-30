@@ -97,9 +97,11 @@ namespace dvb
 
 		logs::info(
 			"devbench: config enabled={} port={} logLevel={} allowConsoleCommands={} allowGameActions={} "
-			"allowControlActions={} allowPapyrusCalls={}",
+			"allowControlActions={} allowPapyrusCalls={} "
+			"foregroundOnLaunch={} disablePowerThrottling={}",
 			config.enabled, config.port, config.logLevel, config.allowConsoleCommands,
-			config.allowGameActions, config.allowControlActions, config.allowPapyrusCalls);
+			config.allowGameActions, config.allowControlActions, config.allowPapyrusCalls,
+			config.foregroundOnLaunch, config.disablePowerThrottling);
 		return config;
 	}
 }
