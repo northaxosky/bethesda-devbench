@@ -228,7 +228,7 @@ export class SessionController {
     if (this.platform) {
       await this.platform.shutdown().catch((error: unknown) => {
         this.logger(
-          `devbench-bridge: platform release during shutdown failed: ${errorMessage(error)}`,
+          `devbench-bridge: platform shutdown failed: ${errorMessage(error)}`,
         );
       });
     }
