@@ -5,32 +5,17 @@
 #include "game/fallout4/Runtime.h"
 #include "tools/camera/MutationDispatch.h"
 
-#include <cstring>
-
 namespace dvb::fallout4
 {
 	namespace
 	{
 		constexpr std::string_view kFeature = "menu controls";
-		constexpr std::size_t      kAeCurrentMessageOffset = 0xF0;
 
 		struct LiveDialog
 		{
 			Scaleform::Ptr<RE::MessageBoxMenu> menu;
 			tools::MenuDialogSnapshot          snapshot;
 		};
-
-		RE::MessageBoxData* CurrentMessageAE(RE::MessageBoxMenu* a_menu)
-		{
-			RE::MessageBoxData* message = nullptr;
-			// AE 1.11.240 moved the live pointer to +0xF0; CommonLib's named +0xE8
-			// member is wrong for this exact, gated runtime.
-			std::memcpy(
-				std::addressof(message),
-				reinterpret_cast<const std::byte*>(a_menu) + kAeCurrentMessageOffset,
-				sizeof(message));
-			return message;
-		}
 
 		std::optional<LiveDialog> ReadLiveDialog()
 		{
@@ -41,7 +26,7 @@ namespace dvb::fallout4
 			if (!menu || !menu->OnStack())
 				return std::nullopt;
 
-			const auto message = CurrentMessageAE(menu.get());
+			const auto message = menu->GetCurrentMessage();
 			if (!message)
 				return std::nullopt;
 
