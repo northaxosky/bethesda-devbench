@@ -1,6 +1,8 @@
 #include "Server.h"
 
 #include "Compatibility.h"
+#include "GameState.h"
+#include "MainThreadTask.h"
 #include "McpAdapter.h"
 #include "RestAdapter.h"
 #include "RuntimePaths.h"
@@ -8,6 +10,7 @@
 #include "RuntimeContext.h"
 #include "Version.h"
 #include "io/WindowsPaths.h"
+#include "waits/AwaitService.h"
 
 #include <httplib.h>
 #include <mcp_server.h>
@@ -101,6 +104,9 @@ namespace
 	// without a Server reference. Atomic: written on the native lifecycle thread
 	// (Start/Stop), read on the render thread (RunTool). Set/cleared by Server::Start/Stop.
 	std::atomic<dvb::ToolRegistry*> g_registry{ nullptr };
+
+	// Process-wide like the server itself; shared/Server.h is an upstream mirror.
+	std::unique_ptr<dvb::waits::AwaitService> g_await;
 
 	// Throttle for ListRecordingsCached: a menu redraws every frame, and listing fully parses every
 	// recording file, so cache the result and refresh at most ~once/second (or on invalidation).
@@ -220,6 +226,8 @@ namespace dvb
 			// instead of stalling; GET /api/health is the real fix for liveness checks.
 			http->set_read_timeout(2, 0);
 			m_restAdapter->Mount(*http);
+			g_await = std::make_unique<waits::AwaitService>(m_events, &game::CurrentFrame, &MainThread::Post);
+			g_await->Mount(*http);
 		}
 		else
 			logs::warn("{}", "devbench: cpp-mcp http() returned null; REST facade unavailable");
@@ -244,6 +252,7 @@ namespace dvb
 			// it would advertise a live bridge for a server that never came up.
 			g_boundPort.store(0);
 			g_registry.store(nullptr);
+			g_await.reset();
 			m_restAdapter.reset();
 			m_mcpAdapter.reset();
 			m_mcp.reset();
@@ -254,11 +263,15 @@ namespace dvb
 
 	void Server::Stop()
 	{
+		// Blocked long-polls must wake first: stopping httplib joins its handler threads.
+		if (g_await)
+			g_await->Shutdown();
 		if (m_mcp)
 		{
 			m_mcp->stop();
 			m_mcp.reset();
 		}
+		g_await.reset();
 		m_restAdapter.reset();
 		m_mcpAdapter.reset();
 		g_boundPort.store(0);

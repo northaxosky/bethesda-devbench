@@ -345,6 +345,7 @@ target("devbench-tests", function()
         "tests/KeyboardInputState_test.cpp",
         "tests/InputTool_test.cpp",
         "tests/StallWatchdog_test.cpp",
+        "tests/EventAwaiter_test.cpp",
         "tests/ExtensionDescriptorRefresh_test.cpp",
         "tests/RecordingTool_test.cpp",
         "tests/SkyrimRecordingActivity_test.cpp",

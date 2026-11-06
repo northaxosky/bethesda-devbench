@@ -10,6 +10,10 @@
 
 namespace dvb::MainThread
 {
+	/// Fire-and-forget submission through the adapter's task interface; false when
+	/// the interface is unavailable or refused the task. Safe from any thread.
+	bool Post(std::function<void()> a_task);
+
 	class QueuedTask
 	{
 	public:
