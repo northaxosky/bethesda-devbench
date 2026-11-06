@@ -16,6 +16,13 @@ export interface SessionLogSpec {
   path: string;
   pattern?: string;
   maxBytes: number;
+  // A new or grown matching file means the game crashed.
+  crash?: boolean;
+}
+
+export interface ExitMarker {
+  path: string;
+  match: string;
 }
 
 export interface SessionConfig {
@@ -32,6 +39,7 @@ export interface SessionConfig {
   expectedDllSha256?: string;
   resultsDir: string;
   logs: SessionLogSpec[];
+  exitMarker?: ExitMarker;
   timings: Partial<SessionTimings>;
 }
 
@@ -130,6 +138,7 @@ export function parseSessionConfig(
     "expectedDllSha256",
     "session config",
   );
+  if (object.exitMarker !== undefined) config.exitMarker = parseExitMarker(object.exitMarker);
   if (runtimeFile) config.runtimeFile = validateAbsolute(runtimeFile, "runtimeFile");
   if (expectedRuntime) config.expectedRuntime = expectedRuntime;
   if (expectedDllSha256) {
@@ -182,6 +191,10 @@ function parseLogs(value: unknown): SessionLogSpec[] {
       "pattern",
       `session config.logs[${String(index)}]`,
     );
+    const crash = entry.crash;
+    if (crash !== undefined && typeof crash !== "boolean") {
+      throw new Error(`session config.logs[${String(index)}].crash must be a boolean`);
+    }
     const maxBytesValue = entry.maxBytes;
     const maxBytes =
       maxBytesValue === undefined ? 1_048_576 : Number(maxBytesValue);
@@ -194,8 +207,20 @@ function parseLogs(value: unknown): SessionLogSpec[] {
       path,
       maxBytes,
       ...(pattern ? { pattern: validatePattern(pattern, index) } : {}),
+      ...(crash === true ? { crash } : {}),
     };
   });
+}
+
+function parseExitMarker(value: unknown): ExitMarker {
+  const object = requireObject(value, "session config.exitMarker");
+  return {
+    path: validateAbsolute(
+      requireString(object, "path", "session config.exitMarker"),
+      "exitMarker.path",
+    ),
+    match: requireString(object, "match", "session config.exitMarker"),
+  };
 }
 
 function absoluteWindowsPath(

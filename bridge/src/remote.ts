@@ -14,7 +14,7 @@ import {
   type RuntimeIdentity,
   type RuntimeTarget,
 } from "./runtime.js";
-import { DEFAULT_CALL_TIMEOUT_MS } from "./timeouts.js";
+import { AWAIT_CALL_MARGIN_MS, DEFAULT_CALL_TIMEOUT_MS } from "./timeouts.js";
 
 export interface RemoteToolDescriptor {
   name: string;
@@ -32,6 +32,33 @@ export interface RemoteEvents {
   headSeq: number;
   events: JsonValue[];
 }
+
+export interface DevBenchEvent extends JsonObject {
+  seq: number;
+  frame?: number;
+  topic: string;
+  data: JsonObject;
+}
+
+export interface AwaitedEvents {
+  headSeq: number;
+  // Oldest retained seq; greater than since+1 means history was lost.
+  oldestSeq: number;
+  events: DevBenchEvent[];
+}
+
+export interface AwaitOptions {
+  waitMs: number;
+  signal?: AbortSignal;
+}
+
+export interface AwaitedFrame {
+  frame: number;
+  advanced: boolean;
+}
+
+// No event has this seq, so the read returns only headSeq.
+const SEQ_BEYOND_HEAD = Number.MAX_SAFE_INTEGER;
 
 export class GameUnavailableError extends Error {
   constructor(
@@ -70,6 +97,7 @@ interface FetchJsonOptions {
   body?: JsonObject;
   timeoutMs: number;
   mutation: boolean;
+  signal?: AbortSignal;
 }
 
 export class RemoteClient {
@@ -201,6 +229,72 @@ export class RemoteClient {
     };
   }
 
+  /** Cursor for events published after this call; reads no history. */
+  async headSeq(): Promise<number> {
+    const { value } = await this.events(SEQ_BEYOND_HEAD);
+    return value.headSeq;
+  }
+
+  /** Long-polls for events after `since`; returns at once when any exist. */
+  async awaitEvents(
+    since: number,
+    options: AwaitOptions,
+  ): Promise<{ identity: RuntimeIdentity; value: AwaitedEvents }> {
+    const resolved = await this.resolve();
+    const body = await this.fetchJson(
+      resolved.identity,
+      `/api/await/events?since=${String(since)}&waitMs=${String(options.waitMs)}`,
+      {
+        timeoutMs: options.waitMs + AWAIT_CALL_MARGIN_MS,
+        mutation: false,
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
+    );
+    const object = requireJsonObject(body, "/api/await/events response");
+    if (
+      !Number.isSafeInteger(object.headSeq) ||
+      !Number.isSafeInteger(object.oldestSeq) ||
+      !Array.isArray(object.events)
+    ) {
+      throw new Error("DevBench /api/await/events response is malformed");
+    }
+    await this.verifyRuntimeFile(resolved.identity);
+    return {
+      identity: resolved.identity,
+      value: {
+        headSeq: object.headSeq as number,
+        oldestSeq: object.oldestSeq as number,
+        events: object.events.map(parseEvent),
+      },
+    };
+  }
+
+  /** Long-polls until the game frame counter passes `after`. */
+  async awaitFrame(
+    after: number,
+    options: AwaitOptions,
+  ): Promise<{ identity: RuntimeIdentity; value: AwaitedFrame }> {
+    const resolved = await this.resolve();
+    const body = await this.fetchJson(
+      resolved.identity,
+      `/api/await/frame?after=${String(after)}&waitMs=${String(options.waitMs)}`,
+      {
+        timeoutMs: options.waitMs + AWAIT_CALL_MARGIN_MS,
+        mutation: false,
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
+    );
+    const object = requireJsonObject(body, "/api/await/frame response");
+    if (!Number.isSafeInteger(object.frame) || typeof object.advanced !== "boolean") {
+      throw new Error("DevBench /api/await/frame response is malformed");
+    }
+    await this.verifyRuntimeFile(resolved.identity);
+    return {
+      identity: resolved.identity,
+      value: { frame: object.frame as number, advanced: object.advanced },
+    };
+  }
+
   private async verifyRuntimeFile(identity: RuntimeIdentity): Promise<void> {
     let current: RuntimeIdentity;
     try {
@@ -234,9 +328,12 @@ export class RemoteClient {
           ...(options.body ? { "Content-Type": "application/json" } : {}),
         },
         ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-        signal: AbortSignal.timeout(options.timeoutMs),
+        signal: options.signal
+          ? AbortSignal.any([AbortSignal.timeout(options.timeoutMs), options.signal])
+          : AbortSignal.timeout(options.timeoutMs),
       });
     } catch (error) {
+      rethrowCancellation(options.signal);
       const detail = `${url}: ${errorMessage(error)}`;
       if (options.mutation) {
         throw new UncertainMutationError(
@@ -250,6 +347,7 @@ export class RemoteClient {
     try {
       text = await response.text();
     } catch (error) {
+      rethrowCancellation(options.signal);
       if (options.mutation) {
         throw new UncertainMutationError(
           `DevBench mutation response body was interrupted and was not retried; outcome is uncertain (${errorMessage(error)})`,
@@ -274,6 +372,27 @@ export class RemoteClient {
     if (!response.ok) throw new RemoteDomainError(response.status, parsed);
     return parsed;
   }
+}
+
+// A caller-initiated abort is a cancellation, not a lost game.
+function rethrowCancellation(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw signal.reason;
+}
+
+function parseEvent(value: JsonValue): DevBenchEvent {
+  if (
+    !isObject(value) ||
+    !Number.isSafeInteger(value.seq) ||
+    typeof value.topic !== "string"
+  ) {
+    throw new Error("DevBench event is malformed");
+  }
+  return {
+    seq: value.seq as number,
+    ...(Number.isSafeInteger(value.frame) ? { frame: value.frame as number } : {}),
+    topic: value.topic,
+    data: isObject(value.data) ? (asJsonValue(value.data) as JsonObject) : {},
+  };
 }
 
 function requireJsonObject(value: JsonValue, context: string): JsonObject {

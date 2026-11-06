@@ -27,23 +27,57 @@ import type {
   StartedProcess,
   InspectedProcess,
 } from "./platform.js";
+import type { WaitEnvironment } from "./proxy.js";
 import {
   GameUnavailableError,
   IdentityChangedError,
   RemoteClient,
   RemoteDomainError,
   UncertainMutationError,
+  type ResolvedRemote,
 } from "./remote.js";
 import {
   processInstanceId,
+  readRuntimeIdentity,
   sameWindowsPath,
   type RuntimeIdentity,
 } from "./runtime.js";
 import {
   DEFAULT_SESSION_TIMINGS,
-  sessionBoundsDescription,
+  PLATFORM_START_CEILING_MS,
   type SessionTimings,
 } from "./timeouts.js";
+import {
+  canLoad,
+  parseCondition,
+  playerReady,
+  scenarioFinished,
+  type WaitCondition,
+} from "./waits/conditions.js";
+import { ExitTracker } from "./waits/exits.js";
+import {
+  abortableDelay,
+  awaitFileProbe,
+  awaitMarkerLine,
+  fileSize,
+  fileTarget,
+} from "./waits/files.js";
+import {
+  CrashLogWatch,
+  WaitFailedError,
+  WaitSignals,
+  whenAborted,
+  withCeiling,
+  type OwnedSignals,
+} from "./waits/signals.js";
+import type {
+  CallContext,
+  ProgressSink,
+  WaitFailure,
+  WaitFailureReason,
+  WaitResult,
+} from "./waits/types.js";
+import { awaitCondition } from "./waits/waiter.js";
 
 export type SessionPhase =
   | "launchfailed"
@@ -76,6 +110,7 @@ interface JobRecord {
   startedAt: string;
   updatedAt: string;
   abort: AbortController;
+  progress?: ProgressSink;
   finished?: Promise<void>;
   result?: JsonObject;
 }
@@ -94,22 +129,33 @@ class WorkflowFailure extends Error {
     readonly phase: SessionPhase,
     message: string,
     readonly detail?: JsonValue,
+    readonly reason?: WaitFailureReason,
   ) {
     super(message);
   }
 }
 
-const MAX_STALL_BACKOFF_MS = 2_000;
-const DEFAULT_WAIT_MS = 90_000;
-// Stays under common MCP client tool-call timeouts.
-const MAX_WAIT_MS = 120_000;
+// The listener thread starts just before runtime.json is written, so the
+// first connection after the file appears can still be refused; retry briefly.
+const STARTUP_RACE_ATTEMPTS = 20;
+const STARTUP_RACE_DELAY_MS = 50;
 
 export const SESSION_TOOL: Tool = {
   name: "devbench.session",
   description:
     "Control one explicitly configured, controller-owned DevBench game session. " +
-    "status is always local. start/run are asynchronous and return a runId; wait blocks until that job finishes (or timeoutMs elapses) and returns status, so call wait instead of polling. run loads a required named fixture, waits for the correlated native operation and player readiness, runs a server-side scenario asynchronously, captures evidence, and stops or releases only the owned game. stop also reclaims a game an earlier bridge launched and never released; force:true terminates it after the graceful timeout, even after an uncertain mutation. No deployment, profile edits, arbitrary commands, or adoption of other games. " +
-    sessionBoundsDescription(),
+    "Every call blocks until the real event happens and returns the result; never sleep, poll status, or use REST. " +
+    "status is always local. " +
+    "start launches the game and returns at canLoad. " +
+    "run launches (or reuses the owned game), waits for canLoad, loads the required named fixture, waits for player readiness of that load, runs a server-side scenario until its scenario.finished event, captures evidence, then stops or releases only the owned game. " +
+    "detach:true on start/run returns {queued, runId} at once; wait {runId} then blocks until that job finishes. " +
+    "wait {until} blocks on a condition against the owned game: canLoad, playerReady {operationId?, actionCursor?}, menu {name, open?}, event {topic, match?, after?} (match alone also scans events fired before the wait), frames {count}; " +
+    "for a game this controller does not own, use the await argument of proxied tools instead. " +
+    "stop closes the owned game and returns after the game exits, the launch shim exits, and the configured exit marker line (RootBuilder cleanup) appears; force:true terminates it when the stop ceiling passes, even after an uncertain mutation; it also reclaims a game an earlier bridge launched and never released. " +
+    "Waits end at once on the real failure signal, with reason exited, crashed, stalled, modal, loadFailed, actionsDisabled, eventHistoryLost, unavailable, cancelled, or ceiling (a safety ceiling, 10 min by default, never the expected path). " +
+    "A modal failure carries the message box text; accept it with the menu tool and wait again. " +
+    "Long calls send MCP progress notifications and are cancellable; cancelling a blocking start/run cancels the job cooperatively and cannot undo an accepted game mutation. " +
+    "Mutations are never retried. No deployment, profile edits, arbitrary commands, or adoption of other games.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -119,14 +165,25 @@ export const SESSION_TOOL: Tool = {
         type: "string",
         enum: ["status", "start", "run", "wait", "stop", "cancel"],
       },
-      runId: { type: "string" },
-      timeoutMs: {
-        type: "integer",
-        minimum: 1,
-        maximum: MAX_WAIT_MS,
-        default: DEFAULT_WAIT_MS,
-        description: "Longest wait blocks; it returns as soon as the job finishes.",
+      runId: { type: "string", description: "Job to wait on or cancel." },
+      detach: {
+        type: "boolean",
+        default: false,
+        description: "start/run: return {queued, runId} instead of blocking.",
       },
+      until: {
+        type: "string",
+        enum: ["canLoad", "playerReady", "menu", "event", "frames"],
+        description: "wait: condition to block on against the owned game.",
+      },
+      operationId: { type: "integer", description: "playerReady: the load operation to correlate." },
+      actionCursor: { type: "integer", description: "playerReady: events after this seq count for load failure." },
+      name: { type: "string", description: "menu: menu name." },
+      open: { type: "boolean", default: true, description: "menu: wait for open (true) or closed (false)." },
+      topic: { type: "string", description: "event: event topic." },
+      match: { type: "object", description: "event: shallow payload match." },
+      after: { type: "integer", description: "event: only events after this seq; fails eventHistoryLost if they were dropped." },
+      count: { type: "integer", minimum: 1, description: "frames: rendered frames to wait for." },
       fixture: {
         type: "string",
         minLength: 1,
@@ -157,6 +214,10 @@ export class SessionController {
   private platform: NativePlatform | undefined;
   private ownedProcess: StartedProcess | undefined;
   private ownershipReleased = false;
+  private exits: ExitTracker | undefined;
+  private ready: ReadySession | undefined;
+  // Exit-marker log size when this launch began; unknown for a reclaimed game.
+  private launchMarkerOffset: number | undefined;
   private activeJob: JobRecord | undefined;
   private lastJob: JobRecord | undefined;
   private nextRunId = 1;
@@ -169,7 +230,10 @@ export class SessionController {
     this.logger = options.logger ?? ((message) => console.error(message));
   }
 
-  async handle(args: JsonObject): Promise<{ value: JsonValue; isError: boolean }> {
+  async handle(
+    args: JsonObject,
+    context: CallContext = {},
+  ): Promise<{ value: JsonValue; isError: boolean }> {
     const action = args.action;
     if (typeof action !== "string") {
       return localError("devbench.session requires a string action");
@@ -179,27 +243,19 @@ export class SessionController {
         case "status":
           return { value: this.status(), isError: false };
         case "start":
-          return {
-            value: this.queue("start", (job) => this.executeStart(job)),
-            isError: false,
-          };
+          return await this.runJob("start", args, context, (job) => this.executeStart(job));
         case "run": {
           const runArgs = await parseRunArguments(args);
-          return {
-            value: this.queue("run", (job) => this.executeRun(job, runArgs)),
-            isError: false,
-          };
+          return await this.runJob("run", args, context, (job) =>
+            this.executeRun(job, runArgs),
+          );
         }
         case "wait":
-          return {
-            value: await this.wait(args.runId, args.timeoutMs),
-            isError: false,
-          };
-        case "stop":
-          return {
-            value: await this.stop(args.force === true),
-            isError: false,
-          };
+          return await this.wait(args, context);
+        case "stop": {
+          const result = await this.stop(args.force === true, context);
+          return { value: result, isError: result.ok !== true };
+        }
         case "cancel":
           return { value: this.cancel(args.runId), isError: false };
         default:
@@ -242,10 +298,25 @@ export class SessionController {
     };
   }
 
+  /** Timings and, for the owned game only, exit and crash-log signals. */
+  async waitEnvironment(instanceId: string): Promise<WaitEnvironment> {
+    try {
+      this.applyConfigTimings(await this.options.config.load());
+    } catch {
+      // Proxy waits work without a session config; defaults apply.
+    }
+    const ready = this.ownedReady();
+    return {
+      timings: this.timings,
+      owned: ready?.identity.instanceId === instanceId ? this.ownedSignals(ready) : undefined,
+    };
+  }
+
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     this.activeJob?.abort.abort();
     this.ownershipReleased = true;
+    this.dropTracking();
     if (this.platform) {
       await this.platform.shutdown().catch((error: unknown) => {
         this.logger(
@@ -255,35 +326,74 @@ export class SessionController {
     }
   }
 
-  private queue(
+  // Blocking calls forward MCP cancellation to the job; detached ones return at once.
+  private async runJob(
     kind: JobRecord["kind"],
+    args: JsonObject,
+    context: CallContext,
     work: (job: JobRecord) => Promise<JsonObject>,
-  ): JsonObject {
+  ): Promise<{ value: JsonValue; isError: boolean }> {
+    if (args.detach !== undefined && typeof args.detach !== "boolean") {
+      throw new Error("detach must be a boolean");
+    }
     const job = this.createJob(kind);
+    const detach = args.detach === true;
+    if (!detach && context.progress) job.progress = context.progress;
     job.finished = this.executeJob(job, () => work(job));
-    return { queued: true, runId: job.id, action: kind };
+    if (detach) {
+      return { value: { queued: true, runId: job.id, action: kind }, isError: false };
+    }
+    const cancel = (): void => job.abort.abort();
+    if (context.signal?.aborted) cancel();
+    else context.signal?.addEventListener("abort", cancel, { once: true });
+    await job.finished;
+    context.signal?.removeEventListener("abort", cancel);
+    const result = job.result ?? {};
+    return { value: result, isError: result.ok !== true };
   }
 
-  private async wait(runId: unknown, timeoutMs: unknown): Promise<JsonObject> {
-    const bound = timeoutMs ?? DEFAULT_WAIT_MS;
-    if (
-      typeof bound !== "number" ||
-      !Number.isInteger(bound) ||
-      bound < 1 ||
-      bound > MAX_WAIT_MS
-    ) {
-      throw new Error(`timeoutMs must be an integer from 1 to ${String(MAX_WAIT_MS)}`);
+  private async wait(
+    args: JsonObject,
+    context: CallContext,
+  ): Promise<{ value: JsonValue; isError: boolean }> {
+    if (args.timeoutMs !== undefined) {
+      throw new Error("timeoutMs was removed; waits end on the real event, with a safety ceiling");
     }
+    if (args.until !== undefined) return await this.waitUntil(args, context);
+    const runId = args.runId;
     const job = this.activeJob;
     if (runId !== undefined && runId !== job?.id && runId !== this.lastJob?.id) {
       throw new Error(`unknown session job ${JSON.stringify(runId)}`);
     }
     if (job?.finished && (runId === undefined || runId === job.id)) {
-      const timer = new AbortController();
-      await Promise.race([job.finished, delay(bound, timer.signal).catch(() => undefined)]);
-      timer.abort();
+      await Promise.race([job.finished, whenAborted(context.signal)]);
     }
-    return this.status();
+    const status = this.status();
+    return {
+      value: context.signal?.aborted ? { ...status, waitCancelled: true } : status,
+      isError: false,
+    };
+  }
+
+  private async waitUntil(
+    args: JsonObject,
+    context: CallContext,
+  ): Promise<{ value: JsonValue; isError: boolean }> {
+    const ready = this.ownedReady();
+    if (!ready) {
+      throw new Error(
+        "wait until needs a game this controller owns and has started; for any other game pass await to the proxied tool instead of waiting here",
+      );
+    }
+    const result = await awaitCondition({
+      remote: ready.remote,
+      condition: parseCondition(args),
+      timings: this.timings,
+      signal: context.signal,
+      progress: context.progress,
+      owned: this.ownedSignals(ready),
+    });
+    return { value: asJsonValue(result), isError: !result.ok };
   }
 
   private createJob(kind: "start" | "run"): JobRecord {
@@ -347,18 +457,21 @@ export class SessionController {
   private async executeStart(job: JobRecord): Promise<JsonObject> {
     let config: SessionConfig | undefined;
     let snapshot: EvidenceSnapshot | undefined;
+    let ready: ReadySession | undefined;
+    const transcript: JsonValue[] = [];
     let report: JsonObject;
     try {
       config = await this.options.config.load();
       this.applyConfigTimings(config);
       snapshot = await snapshotEvidence(config);
-      const ready = await this.ensureReady(config, job.abort.signal);
-      report = successReport(job, ready, []);
+      ready = await this.ensureReady(config, job);
+      await this.awaitStage(ready, job, transcript, canLoad(), "loadfailed");
+      report = successReport(job, ready, transcript);
     } catch (error) {
-      report = failureReport(job, classifyFailure(error), error);
+      report = failureReport(job, classifyFailure(error), error, ready, transcript);
       report = await this.enrichFailure(report, config);
       if (this.ownedProcess && !this.uncertainWrite && !this.shuttingDown) {
-        const cleanup = await this.cleanup(false);
+        const cleanup = await this.cleanup(false, { progress: job.progress });
         if (!cleanup.ok) {
           report.phase = "cleanupfailed";
           report.cleanup = cleanup;
@@ -382,16 +495,15 @@ export class SessionController {
       config = await this.options.config.load();
       this.applyConfigTimings(config);
       snapshot = await snapshotEvidence(config);
-      ready = await this.ensureReady(config, job.abort.signal);
+      ready = await this.ensureReady(config, job);
       transcript.push(asJsonValue({
         stage: "ready",
         identity: ready.identity,
         inspect: ready.inspect,
       }));
 
-      await this.waitForLoadAvailability(ready, job.abort.signal, transcript);
-      const eventStart = await ready.remote.events(0);
-      const eventCursor = eventStart.value.headSeq;
+      await this.awaitStage(ready, job, transcript, canLoad(), "loadfailed");
+      const loadCursor = await ready.remote.headSeq();
       const load = await mutate(
         ready.remote,
         "game",
@@ -409,23 +521,25 @@ export class SessionController {
           asJsonValue(receipt),
         );
       }
-      const operationId = receipt.operationId as number;
-      await this.waitForLoad(
+      await this.awaitStage(
         ready,
-        operationId,
-        job.abort.signal,
+        job,
         transcript,
+        playerReady({
+          operationId: receipt.operationId as number,
+          ...(Number.isSafeInteger(receipt.actionCursor)
+            ? { actionCursor: receipt.actionCursor as number }
+            : {}),
+        }),
+        "loadfailed",
+        loadCursor,
       );
 
-      const scenarioArgs = {
-        ...args.scenario,
-        action: "run",
-        async: true,
-      };
+      const scenarioCursor = await ready.remote.headSeq();
       const launched = await mutate(
         ready.remote,
         "scenario",
-        scenarioArgs,
+        { ...args.scenario, action: "run", async: true },
       );
       transcript.push({ stage: "scenario.queued", result: launched });
       const launchObject = requireObject(launched, "scenario launch receipt");
@@ -440,12 +554,17 @@ export class SessionController {
         );
       }
       this.scenarioRunId = launchObject.runId as number;
-      const scenarioResult = await this.waitForScenario(
+      const finished = await this.awaitStage(
         ready,
-        this.scenarioRunId,
-        eventCursor,
-        job.abort.signal,
+        job,
         transcript,
+        scenarioFinished(this.scenarioRunId),
+        "scenariofailed",
+        scenarioCursor,
+      );
+      const scenarioStatus = requireObject(finished.satisfied.scenario, "scenario status");
+      const scenarioResult = asJsonValue(
+        scenarioStatus.result === undefined ? scenarioStatus : scenarioStatus.result,
       );
       if (!isObject(scenarioResult) || scenarioResult.ok !== true) {
         throw new WorkflowFailure(
@@ -457,7 +576,7 @@ export class SessionController {
 
       const cleanup =
         args.finish === "stop"
-          ? await this.cleanup(args.forceStop)
+          ? await this.cleanup(args.forceStop, { progress: job.progress })
           : await this.releaseOwnership();
       report = successReport(job, ready, transcript);
       report.fixture = args.fixture;
@@ -491,7 +610,7 @@ export class SessionController {
           }
         }
         if (args.finish === "stop" && this.ownedProcess) {
-          const cleanup = await this.cleanup(args.forceStop);
+          const cleanup = await this.cleanup(args.forceStop, { progress: job.progress });
           report.cleanup = cleanup;
           if (!cleanup.ok) report.phase = "cleanupfailed";
         } else if (args.finish === "leave-running" && this.ownedProcess) {
@@ -513,9 +632,37 @@ export class SessionController {
     return this.finishEvidence(job, config, snapshot, report);
   }
 
+  // One waiter run for a job stage; a failed wait becomes a workflow failure.
+  private async awaitStage(
+    ready: ReadySession,
+    job: JobRecord,
+    transcript: JsonValue[],
+    condition: WaitCondition,
+    failurePhase: SessionPhase,
+    since?: number,
+  ): Promise<Extract<WaitResult, { ok: true }>> {
+    const result = await awaitCondition({
+      remote: ready.remote,
+      condition,
+      ...(since !== undefined ? { since } : {}),
+      timings: this.timings,
+      signal: job.abort.signal,
+      progress: job.progress,
+      owned: this.ownedSignals(ready),
+    });
+    transcript.push({ stage: condition.until, result: asJsonValue(result) });
+    if (result.ok) return result;
+    throw new WorkflowFailure(
+      result.reason === "cancelled" ? "cancelled" : failurePhase,
+      `${condition.until} wait failed: ${result.reason}`,
+      result.detail,
+      result.reason,
+    );
+  }
+
   private async ensureReady(
     config: SessionConfig,
-    signal: AbortSignal,
+    job: JobRecord,
   ): Promise<ReadySession> {
     await validateLaunchInputs(config);
     const dllSha256 = await sha256File(config.devbenchDll);
@@ -541,6 +688,9 @@ export class SessionController {
           asJsonValue(prior),
         );
       }
+      this.launchMarkerOffset = config.exitMarker
+        ? await fileSize(config.exitMarker.path)
+        : undefined;
       const requestedAt = Date.now();
       process = await platform.start({
         mo2Exe: config.mo2Exe,
@@ -549,10 +699,9 @@ export class SessionController {
         executable: config.executable,
         gameExe: config.gameExe,
         loaderExe: config.loaderExe,
-        timeoutMs: this.timings.platformStartTimeoutMs,
+        timeoutMs: PLATFORM_START_CEILING_MS,
       });
-      this.ownedProcess = process;
-      this.ownershipReleased = false;
+      this.adopt(platform, process);
       // FILETIME and Date.now() share the system clock; allow rounding only.
       if (Date.parse(process.creationTime) < requestedAt - 1_000) {
         throw new WorkflowFailure(
@@ -561,59 +710,108 @@ export class SessionController {
         );
       }
     }
+    const ready = await this.awaitRuntime(
+      config,
+      this.options.remoteFactory(config),
+      process,
+      dllSha256,
+      job,
+    );
+    this.ready = ready;
+    return ready;
+  }
+
+  // Waits on runtime.json changes, game exit, crash logs, and the ceiling.
+  private async awaitRuntime(
+    config: SessionConfig,
+    remote: RemoteClient,
+    process: StartedProcess,
+    dllSha256: string,
+    job: JobRecord,
+  ): Promise<ReadySession> {
     const instanceId = processInstanceId(process.pid, process.creationTime);
-    const remote = this.options.remoteFactory(config);
-    const deadline = deadlineAfter(this.timings.healthTimeoutMs);
-    let lastError = "DevBench did not become ready";
-    while (!deadline.expired()) {
-      throwIfAborted(signal);
-      try {
-        const resolved = await remote.resolve();
-        if (resolved.identity.instanceId !== instanceId) {
-          throw new WorkflowFailure(
-            "identitymismatch",
-            `runtime instance ${resolved.identity.instanceId} is not the owned process ${instanceId}`,
-          );
-        }
-        if (!sameWindowsPath(resolved.identity.exePath, config.gameExe)) {
-          throw new WorkflowFailure(
-            "identitymismatch",
-            `runtime exePath ${resolved.identity.exePath} does not match configured gameExe ${config.gameExe}`,
-          );
-        }
-        const inspect = await platform.inspect({
-          pid: process.pid,
-          gameExe: config.gameExe,
-          pluginName: "devbench.dll",
-        });
-        verifyNativeIdentity(config, process, inspect, resolved.identity, dllSha256);
-        remote.pin(resolved.identity);
-        return {
-          config,
-          remote,
-          process,
-          identity: resolved.identity,
-          inspect,
-          dllSha256,
-        };
-      } catch (error) {
-        if (error instanceof WorkflowFailure) throw error;
-        lastError = errorMessage(error);
+    const observation = { note: "runtime.json has not appeared" };
+    const signals = await WaitSignals.start({
+      ceilingMs: this.timings.ceilingMs,
+      stallMs: this.timings.stallMs,
+      signal: job.abort.signal,
+      owned: this.exits
+        ? { instanceId, exits: this.exits, crashLogs: config.logs }
+        : undefined,
+      progress: job.progress,
+    });
+    try {
+      return await signals.guard(
+        awaitFileProbe({
+          targets: remote.target.runtimeFiles.map(fileTarget),
+          signal: signals.signal,
+          probe: () =>
+            this.probeRuntime(config, remote, process, instanceId, dllSha256, observation, signals.signal),
+        }),
+      );
+    } catch (error) {
+      if (error instanceof WaitFailedError) {
+        throw launchFailure(error.failure, process, observation.note);
       }
-      const owned = await platform.status();
-      if (!owned.running) {
+      throw error;
+    } finally {
+      signals.dispose();
+    }
+  }
+
+  private async probeRuntime(
+    config: SessionConfig,
+    remote: RemoteClient,
+    process: StartedProcess,
+    instanceId: string,
+    dllSha256: string,
+    observation: { note: string },
+    signal: AbortSignal,
+  ): Promise<ReadySession | undefined> {
+    const platform = this.getPlatform();
+    for (const runtimeFile of remote.target.runtimeFiles) {
+      let identity: RuntimeIdentity;
+      try {
+        identity = await readRuntimeIdentity(runtimeFile);
+      } catch (error) {
+        observation.note = errorMessage(error);
+        continue;
+      }
+      if (identity.instanceId !== instanceId) {
+        observation.note = `runtime.json at ${runtimeFile} identifies ${identity.instanceId}, not the owned process ${instanceId}`;
+        continue;
+      }
+      const resolved = await resolveAfterStartup(remote, signal, observation);
+      if (!resolved) return undefined;
+      if (resolved.identity.instanceId !== instanceId) {
         throw new WorkflowFailure(
-          "launchfailed",
-          `owned game pid ${String(process.pid)} exited before DevBench became ready: ${lastError}`,
-          asJsonValue(owned),
+          "identitymismatch",
+          `runtime instance ${resolved.identity.instanceId} is not the owned process ${instanceId}`,
         );
       }
-      await delay(this.timings.pollIntervalMs, signal);
+      if (!sameWindowsPath(resolved.identity.exePath, config.gameExe)) {
+        throw new WorkflowFailure(
+          "identitymismatch",
+          `runtime exePath ${resolved.identity.exePath} does not match configured gameExe ${config.gameExe}`,
+        );
+      }
+      const inspect = await platform.inspect({
+        pid: process.pid,
+        gameExe: config.gameExe,
+        pluginName: "devbench.dll",
+      });
+      verifyNativeIdentity(config, process, inspect, resolved.identity, dllSha256);
+      remote.pin(resolved.identity);
+      return {
+        config,
+        remote,
+        process,
+        identity: resolved.identity,
+        inspect,
+        dllSha256,
+      };
     }
-    throw new WorkflowFailure(
-      "launchfailed",
-      `timed out waiting for DevBench health and native module identity: ${lastError}`,
-    );
+    return undefined;
   }
 
   // A stop that timed out keeps ownership; never reuse it once the game exits.
@@ -623,179 +821,39 @@ export class SessionController {
     if (status.owned && status.running) return;
     if (status.owned) await platform.release();
     this.ownershipReleased = true;
+    this.dropTracking();
     this.logger(
       `devbench-bridge: retained game pid ${String(this.ownedProcess.pid)} has exited; launching a new owned game`,
     );
   }
 
-  // Read-only observations retry main-thread stalls; mutations never retry.
-  private async observe(
-    remote: RemoteClient,
-    name: string,
-    args: JsonObject,
-    signal: AbortSignal,
-    transcript: JsonValue[],
-  ): Promise<JsonValue> {
-    const budget = deadlineAfter(this.timings.mainThreadStallBudgetMs);
-    let backoff = this.timings.pollIntervalMs;
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return (await remote.callTool(name, args, { mutation: false })).value;
-      } catch (error) {
-        if (
-          !(error instanceof RemoteDomainError && error.status === 504) ||
-          budget.expired()
-        ) {
-          throw domainFailure(name, error);
-        }
-        transcript.push({
-          stage: "observe.retry",
-          tool: name,
-          attempt,
-          detail: error.body,
-        });
-      }
-      await delay(backoff, signal);
-      backoff = Math.min(backoff * 2, MAX_STALL_BACKOFF_MS);
-    }
+  private adopt(platform: NativePlatform, process: StartedProcess): void {
+    this.dropTracking();
+    this.ownedProcess = process;
+    this.ownershipReleased = false;
+    this.exits = new ExitTracker(platform, process);
   }
 
-  private async waitForLoadAvailability(
-    ready: ReadySession,
-    signal: AbortSignal,
-    transcript: JsonValue[],
-  ): Promise<void> {
-    const deadline = deadlineAfter(this.timings.mainMenuTimeoutMs);
-    while (!deadline.expired()) {
-      throwIfAborted(signal);
-      const status = requireObject(
-        await this.observe(ready.remote, "game", { action: "status" }, signal, transcript),
-        "game status",
-      );
-      if (status.actionsAllowed !== true) {
-        throw new WorkflowFailure("loadfailed", "Native game actions are disabled; allowGameActions must be enabled before launch");
-      }
-      if (status.gameLoaded === true && status.canLoad === true &&
-        (!isObject(status.operation) || status.operation.active !== true)) {
-        transcript.push({ stage: "load.available", status: asJsonValue(status) });
-        return;
-      }
-      await delay(this.timings.pollIntervalMs, signal);
-    }
-    throw new WorkflowFailure("loadfailed", "Timed out waiting for the game to accept a native fixture load");
+  private dropTracking(): void {
+    this.exits?.dispose();
+    this.exits = undefined;
+    this.ready = undefined;
   }
 
-  private async waitForLoad(
-    ready: ReadySession,
-    operationId: number,
-    signal: AbortSignal,
-    transcript: JsonValue[],
-  ): Promise<void> {
-    const deadline = deadlineAfter(this.timings.loadTimeoutMs);
-    while (!deadline.expired()) {
-      throwIfAborted(signal);
-      const statusValue = await this.observe(
-        ready.remote,
-        "game",
-        { action: "status" },
-        signal,
-        transcript,
-      );
-      const status = requireObject(statusValue, "game status");
-      const operation = status.operation;
-      if (isObject(operation) && operation.operationId === operationId) {
-        transcript.push({
-          stage: "load.status",
-          phase: asJsonValue(operation.phase),
-          success: asJsonValue(operation.success),
-        });
-        if (
-          operation.phase === "failed" ||
-          operation.phase === "cancelled" ||
-          operation.success === false
-        ) {
-          throw new WorkflowFailure(
-            "loadfailed",
-            "the correlated native load operation failed",
-            asJsonValue(operation),
-          );
-        }
-        if (operation.phase === "succeeded" && operation.success === true) {
-          const stateValue = await this.observe(
-            ready.remote,
-            "inspect",
-            { kind: "state" },
-            signal,
-            transcript,
-          );
-          const state = requireObject(stateValue, "inspect state");
-          if (state.playerLoaded === true) {
-            transcript.push({ stage: "load.ready", state: asJsonValue(state) });
-            return;
-          }
-        }
-      }
-      await delay(this.timings.pollIntervalMs, signal);
-    }
-    throw new WorkflowFailure(
-      "loadfailed",
-      `timed out waiting for operationId ${String(operationId)} and player readiness`,
-    );
+  private ownedReady(): ReadySession | undefined {
+    return this.ready && !this.ownershipReleased && this.exits ? this.ready : undefined;
   }
 
-  private async waitForScenario(
-    ready: ReadySession,
-    runId: number,
-    initialCursor: number,
-    signal: AbortSignal,
-    transcript: JsonValue[],
-  ): Promise<JsonValue> {
-    const deadline = deadlineAfter(this.timings.scenarioTimeoutMs);
-    let cursor = initialCursor;
-    while (!deadline.expired()) {
-      throwIfAborted(signal);
-      const statusValue = await this.observe(
-        ready.remote,
-        "scenario",
-        { action: "status", runId },
-        signal,
-        transcript,
-      );
-      const status = requireObject(statusValue, "scenario status");
-      const eventBatch = await ready.remote.events(cursor).catch((error: unknown) => {
-        transcript.push({
-          stage: "scenario.events.unavailable",
-          error: errorMessage(error),
-        });
-        return undefined;
-      });
-      if (eventBatch) {
-        cursor = eventBatch.value.headSeq;
-        const progress = eventBatch.value.events.filter(
-          (event) =>
-            isObject(event) &&
-            typeof event.topic === "string" &&
-            event.topic.startsWith("scenario."),
-        );
-        if (progress.length > 0) {
-          transcript.push({ stage: "scenario.events", events: progress });
-        }
-      }
-      if (status.done === true) {
-        transcript.push({ stage: "scenario.done", status: asJsonValue(status) });
-        return status.result === undefined
-          ? asJsonValue(status)
-          : asJsonValue(status.result);
-      }
-      await delay(this.timings.pollIntervalMs, signal);
-    }
-    throw new WorkflowFailure(
-      "scenariofailed",
-      `timed out waiting for scenario runId ${String(runId)}`,
-    );
+  private ownedSignals(ready: ReadySession): OwnedSignals | undefined {
+    if (!this.exits || this.ownershipReleased) return undefined;
+    return {
+      instanceId: ready.identity.instanceId,
+      exits: this.exits,
+      crashLogs: ready.config.logs,
+    };
   }
 
-  private async stop(force: boolean): Promise<JsonObject> {
+  private async stop(force: boolean, context: CallContext): Promise<JsonObject> {
     if (this.activeJob) {
       throw new Error(
         `cannot stop while ${this.activeJob.id} is active; cancel it first`,
@@ -810,7 +868,7 @@ export class SessionController {
         "session.stop refused after an uncertain remote mutation; verify the game, then pass force:true to close it anyway",
       );
     }
-    const result = await this.cleanup(force);
+    const result = await this.cleanup(force, context);
     if (result.exited === true) this.uncertainWrite = false;
     return result;
   }
@@ -819,15 +877,18 @@ export class SessionController {
   private async reclaim(): Promise<void> {
     const config = await this.options.config.load();
     this.applyConfigTimings(config);
+    const platform = this.getPlatform();
+    let process: StartedProcess;
     try {
-      this.ownedProcess = await this.getPlatform().reclaim(config.gameExe);
+      process = await platform.reclaim(config.gameExe);
     } catch (error) {
       throw new Error(
         `session.stop refused: this controller does not own a retained game process (${errorMessage(error)})`,
         { cause: error },
       );
     }
-    this.ownershipReleased = false;
+    this.adopt(platform, process);
+    this.launchMarkerOffset = undefined;
   }
 
   private cancel(runId: unknown): JsonObject {
@@ -849,47 +910,110 @@ export class SessionController {
     };
   }
 
-  private async cleanup(force: boolean): Promise<JsonObject> {
-    if (!this.platform || !this.ownedProcess || this.ownershipReleased) {
+  // Close, then wait for game exit, shim exit, and the exit marker, each
+  // against the stop ceiling; force terminates only after the ceiling passes.
+  private async cleanup(force: boolean, context: CallContext): Promise<JsonObject> {
+    const platform = this.platform;
+    const exits = this.exits;
+    if (!platform || !this.ownedProcess || !exits || this.ownershipReleased) {
       return { ok: false, reason: "no retained owned process" };
     }
-    const status = await this.platform.status();
+    const status = await platform.status();
     if (!status.owned) {
       this.ownershipReleased = true;
+      this.dropTracking();
       return {
         ok: false,
         reason: "platform helper no longer proves ownership; no close was attempted",
       };
     }
-    if (!status.running) {
-      await this.platform.release();
-      this.ownershipReleased = true;
-      return { ok: true, exited: true, alreadyExited: true };
+    const config = await this.options.config.load();
+    const ceilingMs = this.timings.stopCeilingMs;
+    const crash = await CrashLogWatch.snapshot(config.logs);
+    const reclaimedMarker = config.exitMarker !== undefined && this.launchMarkerOffset === undefined;
+    const markerOffset = config.exitMarker
+      ? (this.launchMarkerOffset ?? (await fileSize(config.exitMarker.path)))
+      : undefined;
+    const cancelled = (forced: boolean): JsonObject => ({
+      ok: false,
+      exited: false,
+      forced,
+      reason: "cancelled; the game was left as it is and ownership is retained",
+    });
+
+    let exited = !status.running;
+    let forced = false;
+    let reason: string | undefined;
+    if (!exited) {
+      const close = await platform.requestClose();
+      if (!close.running) {
+        exited = true;
+      } else {
+        const gone = await withCeiling(() => exits.gameExited, ceilingMs, context.signal);
+        if (!gone.done && gone.reason === "cancelled") return cancelled(false);
+        exited = gone.done;
+        reason = gone.done ? undefined : "graceful close did not finish within stopCeilingMs";
+      }
+      if (!exited && force) {
+        forced = true;
+        const terminated = await platform.terminate();
+        exited = terminated.exited;
+        reason = terminated.reason ?? reason;
+      }
     }
-    const graceful = await this.platform.close(this.timings.gracefulStopTimeoutMs);
-    if (graceful.exited) {
-      await this.platform.release();
-      this.ownershipReleased = true;
-      return { ok: true, exited: true, forced: false };
-    }
-    if (!force) {
+    if (!exited) {
       return {
         ok: false,
         exited: false,
-        forced: false,
-        reason: graceful.reason ?? "graceful close timed out",
+        forced,
+        shimExited: false,
+        exitMarker: null,
+        ...(reason ? { reason } : {}),
       };
     }
-    const terminated = await this.platform.terminate();
-    if (terminated.exited) {
-      await this.platform.release();
-      this.ownershipReleased = true;
+    const crashPath = await crash.scan().catch(() => undefined);
+
+    await exits.confirmShim();
+    const shim = await withCeiling(() => exits.shimExited, ceilingMs, context.signal);
+    if (!shim.done && shim.reason === "cancelled") return cancelled(forced);
+    if (!shim.done) {
+      return {
+        ok: false,
+        exited: true,
+        forced,
+        shimExited: false,
+        exitMarker: null,
+        reason: "the launch shim did not exit within stopCeilingMs; ownership is retained",
+      };
+    }
+    await platform.release();
+    this.ownershipReleased = true;
+    this.dropTracking();
+
+    let exitMarker: JsonObject | null = null;
+    if (config.exitMarker && markerOffset !== undefined) {
+      const { path, match } = config.exitMarker;
+      const found = await withCeiling(
+        (signal) => awaitMarkerLine({ path, match, offset: markerOffset }, signal),
+        ceilingMs,
+        context.signal,
+      );
+      exitMarker = {
+        matched: found.done,
+        ...(found.done ? { line: found.value } : { reason: found.reason }),
+        ...(reclaimedMarker
+          ? { note: "reclaimed game: the marker offset was recorded at stop time" }
+          : {}),
+      };
     }
     return {
-      ok: terminated.exited,
-      exited: terminated.exited,
-      forced: true,
-      ...(terminated.reason ? { reason: terminated.reason } : {}),
+      ok: exitMarker === null || exitMarker.matched === true,
+      exited: true,
+      forced,
+      shimExited: true,
+      exitMarker,
+      ...(status.running ? {} : { alreadyExited: true }),
+      ...(crashPath ? { crash: { path: crashPath } } : {}),
     };
   }
 
@@ -899,6 +1023,7 @@ export class SessionController {
     }
     await this.platform.release();
     this.ownershipReleased = true;
+    this.dropTracking();
     return {
       ok: true,
       released: true,
@@ -986,6 +1111,52 @@ export class SessionController {
     this.platform ??= this.options.platformFactory();
     return this.platform;
   }
+}
+
+// Retries only a refused connection, once per runtime.json change.
+async function resolveAfterStartup(
+  remote: RemoteClient,
+  signal: AbortSignal,
+  observation: { note: string },
+): Promise<ResolvedRemote | undefined> {
+  for (let attempt = 0; attempt < STARTUP_RACE_ATTEMPTS; attempt++) {
+    try {
+      return await remote.resolve();
+    } catch (error) {
+      if (!(error instanceof GameUnavailableError)) throw error;
+      observation.note = error.message;
+    }
+    await abortableDelay(STARTUP_RACE_DELAY_MS, signal);
+  }
+  return undefined;
+}
+
+function launchFailure(
+  failure: WaitFailure,
+  process: StartedProcess,
+  note: string,
+): WorkflowFailure {
+  const pid = String(process.pid);
+  let message: string;
+  switch (failure.reason) {
+    case "exited":
+      message = `owned game pid ${pid} exited before DevBench became ready: ${note}`;
+      break;
+    case "crashed":
+      message = `owned game pid ${pid} crashed before DevBench became ready: ${note}`;
+      break;
+    case "ceiling":
+      message = `timed out waiting for DevBench to publish its runtime identity: ${note}`;
+      break;
+    default:
+      message = `launch wait failed (${failure.reason}): ${note}`;
+  }
+  return new WorkflowFailure(
+    failure.reason === "cancelled" ? "cancelled" : "launchfailed",
+    message,
+    failure.detail,
+    failure.reason,
+  );
 }
 
 async function parseRunArguments(args: JsonObject): Promise<RunArguments> {
@@ -1172,6 +1343,7 @@ function failureReport(
     phase,
     runId: job.id,
     error: errorMessage(error),
+    ...(error instanceof WorkflowFailure && error.reason ? { reason: error.reason } : {}),
     detail,
     ...(ready
       ? {
@@ -1221,33 +1393,3 @@ async function sha256File(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
-function deadlineAfter(timeoutMs: number): {
-  expired: () => boolean;
-} {
-  const end = performance.now() + timeoutMs;
-  return { expired: () => performance.now() >= end };
-}
-
-async function delay(timeoutMs: number, signal: AbortSignal): Promise<void> {
-  await new Promise<void>((resolvePromise, reject) => {
-    if (signal.aborted) {
-      reject(new DOMException("session job cancelled", "AbortError"));
-      return;
-    }
-    const timeout = setTimeout(resolvePromise, timeoutMs);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timeout);
-        reject(new DOMException("session job cancelled", "AbortError"));
-      },
-      { once: true },
-    );
-  });
-}
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) {
-    throw new DOMException("session job cancelled", "AbortError");
-  }
-}

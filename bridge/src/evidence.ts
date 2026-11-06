@@ -193,7 +193,7 @@ async function hashPrefix(path: string, count: number): Promise<string> {
   }
 }
 
-async function expandSpec(spec: SessionLogSpec): Promise<string[]> {
+export async function expandSpec(spec: SessionLogSpec): Promise<string[]> {
   if (!spec.pattern) return [spec.path];
   const entries = await readdir(spec.path, { withFileTypes: true });
   const expression = wildcardExpression(spec.pattern);
@@ -202,7 +202,7 @@ async function expandSpec(spec: SessionLogSpec): Promise<string[]> {
     .map((entry) => join(spec.path, entry.name));
 }
 
-function wildcardExpression(pattern: string): RegExp {
+export function wildcardExpression(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   return new RegExp(
     `^${escaped.replaceAll("*", ".*").replaceAll("?", ".")}$`,

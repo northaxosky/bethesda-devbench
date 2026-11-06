@@ -34,41 +34,45 @@ export function callTimeoutFor(
   return timeout > defaultMs ? timeout : undefined;
 }
 
+// Transport bounds for the held long-poll requests, not flow waits.
+export const AWAIT_POLL_MS = 20_000;
+export const AWAIT_CALL_MARGIN_MS = 10_000;
+// The launch helper rejects start handshakes above 60 s.
+export const PLATFORM_START_CEILING_MS = 60_000;
+
 export interface SessionTimings {
-  healthTimeoutMs: number;
-  mainMenuTimeoutMs: number;
-  loadTimeoutMs: number;
-  scenarioTimeoutMs: number;
-  gracefulStopTimeoutMs: number;
-  pollIntervalMs: number;
-  platformStartTimeoutMs: number;
-  mainThreadStallBudgetMs: number;
+  // Main-thread stall before a foreground wait fails.
+  stallMs: number;
+  // Safety ceiling of every wait; never the expected way to finish.
+  ceilingMs: number;
+  // Safety ceiling of each stop stage (game exit, shim exit, exit marker).
+  stopCeilingMs: number;
 }
 
+export type WaitTimings = Pick<SessionTimings, "stallMs" | "ceilingMs">;
+
 export const DEFAULT_SESSION_TIMINGS: SessionTimings = {
-  healthTimeoutMs: 5_000,
-  mainMenuTimeoutMs: 50_000,
-  loadTimeoutMs: 10_000,
-  scenarioTimeoutMs: 60_000,
-  // The launch helper rejects close timeouts above 30 s.
-  gracefulStopTimeoutMs: 10_000,
-  pollIntervalMs: 250,
-  // MO2 forward to shim ownership transfer; the helper caps it at 60 s.
-  platformStartTimeoutMs: 10_000,
-  // First world frames after a load can stall the main thread for seconds.
-  mainThreadStallBudgetMs: 30_000,
+  stallMs: 120_000,
+  ceilingMs: 600_000,
+  stopCeilingMs: 120_000,
 };
 
 const MAX_TIMING_MS = 3_600_000;
 export const TIMING_MAXIMA: Readonly<Record<keyof SessionTimings, number>> = {
-  healthTimeoutMs: MAX_TIMING_MS,
-  mainMenuTimeoutMs: MAX_TIMING_MS,
-  loadTimeoutMs: MAX_TIMING_MS,
-  scenarioTimeoutMs: MAX_TIMING_MS,
-  gracefulStopTimeoutMs: 30_000,
-  pollIntervalMs: 60_000,
-  platformStartTimeoutMs: 60_000,
-  mainThreadStallBudgetMs: MAX_TIMING_MS,
+  stallMs: MAX_TIMING_MS,
+  ceilingMs: MAX_TIMING_MS,
+  stopCeilingMs: MAX_TIMING_MS,
+};
+
+const REMOVED_TIMING_REPLACEMENTS: Readonly<Record<string, string>> = {
+  healthTimeoutMs: "launch waits on runtime.json and process exit; use ceilingMs",
+  mainMenuTimeoutMs: "waits end on events; use ceilingMs",
+  loadTimeoutMs: "waits end on events; use ceilingMs",
+  scenarioTimeoutMs: "waits end on events; use ceilingMs",
+  gracefulStopTimeoutMs: "use stopCeilingMs",
+  pollIntervalMs: "nothing polls any more; remove it",
+  platformStartTimeoutMs: "the start handshake ceiling is fixed at 60 s; remove it",
+  mainThreadStallBudgetMs: "use stallMs",
 };
 
 /** Parses the optional session config `timings` overrides. */
@@ -77,6 +81,11 @@ export function parseSessionTimings(value: unknown): Partial<SessionTimings> {
   if (!isObject(value)) throw new Error("session config.timings must be an object");
   const timings: Partial<SessionTimings> = {};
   for (const [key, entry] of Object.entries(value)) {
+    if (Object.hasOwn(REMOVED_TIMING_REPLACEMENTS, key)) {
+      throw new Error(
+        `session config.timings.${key} was removed: ${REMOVED_TIMING_REPLACEMENTS[key] ?? ""}`,
+      );
+    }
     if (!Object.hasOwn(TIMING_MAXIMA, key)) {
       throw new Error(`session config.timings.${key} is not a known timing`);
     }
@@ -88,19 +97,4 @@ export function parseSessionTimings(value: unknown): Partial<SessionTimings> {
     timings[name] = entry as number;
   }
   return timings;
-}
-
-const seconds = (ms: number): string => `${String(ms / 1000)} s`;
-
-/** Bounds paragraph of the devbench.session description, from the defaults. */
-export function sessionBoundsDescription(t: SessionTimings = DEFAULT_SESSION_TIMINGS): string {
-  return (
-    "Bounds (defaults; raise with session.json timings): " +
-    `launch to health <=${seconds(t.healthTimeoutMs)}, ` +
-    `health to main menu (canLoad) <=${seconds(t.mainMenuTimeoutMs)}, ` +
-    `fixture load to player ready <=${seconds(t.loadTimeoutMs)}, ` +
-    `scenario run <=${seconds(t.scenarioTimeoutMs)} of scenario time, ` +
-    `graceful stop <=${seconds(t.gracefulStopTimeoutMs)}. ` +
-    "After start/run, call wait; when a bound is exceeded, stop and report, and never retry a mutation."
-  );
 }

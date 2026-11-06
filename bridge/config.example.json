@@ -18,15 +18,17 @@
     {
       "path": "C:\\Path\\To\\Crash Logs",
       "pattern": "crash-*.log",
-      "maxBytes": 2097152
+      "maxBytes": 2097152,
+      "crash": true
     }
   ],
+  "exitMarker": {
+    "path": "C:\\Path\\To\\Mod Organizer 2\\logs\\mo_interface.log",
+    "match": "[RootBuilder] Clear complete!"
+  },
   "timings": {
-    "healthTimeoutMs": 5000,
-    "mainMenuTimeoutMs": 50000,
-    "loadTimeoutMs": 10000,
-    "scenarioTimeoutMs": 60000,
-    "platformStartTimeoutMs": 10000,
-    "gracefulStopTimeoutMs": 10000
+    "stallMs": 120000,
+    "ceilingMs": 600000,
+    "stopCeilingMs": 120000
   }
 }

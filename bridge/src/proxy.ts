@@ -1,7 +1,7 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { coreTools } from "./catalog.js";
-import { asJsonValue, errorMessage, type JsonObject, type JsonValue } from "./json.js";
+import { asJsonValue, errorMessage, isObject, type JsonObject, type JsonValue } from "./json.js";
 import {
   GameUnavailableError,
   IdentityChangedError,
@@ -10,7 +10,17 @@ import {
   type RemoteToolDescriptor,
 } from "./remote.js";
 import type { RuntimeIdentity } from "./runtime.js";
-import { callTimeoutFor } from "./timeouts.js";
+import { DEFAULT_SESSION_TIMINGS, callTimeoutFor, type WaitTimings } from "./timeouts.js";
+import {
+  AWAIT_SCHEMA,
+  awaitsOutcome,
+  outcomeFor,
+  splitAwait,
+  type AwaitArgument,
+} from "./waits/outcomes.js";
+import type { OwnedSignals } from "./waits/signals.js";
+import type { CallContext } from "./waits/types.js";
+import { awaitCondition } from "./waits/waiter.js";
 
 export interface ProxyCallResult {
   value: JsonValue;
@@ -24,8 +34,18 @@ export interface ProxyStatus {
   unavailableReason?: string;
 }
 
+/** What a proxy wait may use beyond the remote: timings and owned-game signals. */
+export interface WaitEnvironment {
+  timings: WaitTimings;
+  owned?: OwnedSignals | undefined;
+}
+
+const DEFAULT_ENVIRONMENT: WaitEnvironment = { timings: DEFAULT_SESSION_TIMINGS };
+
 export interface RemoteProxyOptions {
   pollIntervalMs?: number;
+  // Resolves the wait environment for the game instance a call reached.
+  environment?: (instanceId: string) => Promise<WaitEnvironment>;
   onListChanged?: () => Promise<void>;
   logger?: (message: string) => void;
 }
@@ -38,6 +58,7 @@ export class RemoteProxy {
   private polling = false;
   private timer: NodeJS.Timeout | undefined;
   private readonly onListChanged: (() => Promise<void>) | undefined;
+  private readonly environment: (instanceId: string) => Promise<WaitEnvironment>;
   private readonly logger: (message: string) => void;
 
   constructor(
@@ -45,6 +66,7 @@ export class RemoteProxy {
     options: RemoteProxyOptions = {},
   ) {
     this.onListChanged = options.onListChanged;
+    this.environment = options.environment ?? (() => Promise.resolve(DEFAULT_ENVIRONMENT));
     this.logger = options.logger ?? ((message) => console.error(message));
     const interval = options.pollIntervalMs ?? 1_000;
     if (interval > 0) {
@@ -63,16 +85,45 @@ export class RemoteProxy {
     );
   }
 
-  async callTool(name: string, args: JsonObject): Promise<ProxyCallResult> {
-    const descriptor = this.liveTools.find((tool) => tool.name === name);
-    const timeoutMs = callTimeoutFor(name, args, this.remote.callTimeoutMs);
+  async callTool(
+    name: string,
+    args: JsonObject,
+    context: CallContext = {},
+  ): Promise<ProxyCallResult> {
+    let split: ReturnType<typeof splitAwait>;
     try {
-      const result = await this.remote.callTool(name, args, {
-        mutation: descriptor?.readOnly !== true,
+      split = splitAwait(args);
+    } catch (error) {
+      return { value: { ok: false, reason: errorMessage(error) }, isError: true };
+    }
+    const { forwarded, awaitArg } = split;
+    const descriptor = this.liveTools.find((tool) => tool.name === name);
+    const mutation = descriptor?.readOnly !== true;
+    if (!mutation && typeof awaitArg === "object") {
+      return {
+        value: { ok: false, reason: `await {event, correlate} needs a mutating tool; ${name} is read-only` },
+        isError: true,
+      };
+    }
+    const waiting = mutation && awaitsOutcome(name, forwarded, awaitArg);
+    const timeoutMs = callTimeoutFor(name, forwarded, this.remote.callTimeoutMs);
+    try {
+      // Events from this call's effects must come after the cursor.
+      const since = waiting ? await this.remote.headSeq() : undefined;
+      const result = await this.remote.callTool(name, forwarded, {
+        mutation,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       });
       this.identity = result.identity;
-      return { value: result.value, isError: false };
+      if (since === undefined || !isObject(result.value)) {
+        return { value: result.value, isError: false };
+      }
+      return await this.awaitOutcome(name, forwarded, awaitArg, {
+        receipt: result.value,
+        instanceId: result.identity.instanceId,
+        since,
+        context,
+      });
     } catch (error) {
       if (error instanceof RemoteDomainError) {
         return { value: error.body, isError: true };
@@ -92,6 +143,38 @@ export class RemoteProxy {
         isError: true,
       };
     }
+  }
+
+  // A failed wait reports in `outcome`; it never re-sends the mutation.
+  private async awaitOutcome(
+    name: string,
+    args: JsonObject,
+    awaitArg: AwaitArgument | undefined,
+    call: { receipt: JsonObject; instanceId: string; since: number; context: CallContext },
+  ): Promise<ProxyCallResult> {
+    const { receipt, instanceId, since, context } = call;
+    const outcome = outcomeFor(name, args, awaitArg, receipt);
+    if (!outcome) return { value: receipt, isError: false };
+    if ("failure" in outcome) {
+      return {
+        value: { ...receipt, outcome: { ok: false, ...asJsonValue(outcome.failure) as JsonObject } },
+        isError: true,
+      };
+    }
+    const environment = await this.environment(instanceId);
+    const waited = await awaitCondition({
+      remote: this.remote,
+      condition: outcome.condition,
+      since,
+      timings: environment.timings,
+      signal: context.signal,
+      progress: context.progress,
+      owned: environment.owned,
+    });
+    return {
+      value: { ...receipt, outcome: asJsonValue(waited) },
+      isError: !waited.ok,
+    };
   }
 
   status(): ProxyStatus {
@@ -165,13 +248,24 @@ export class RemoteProxy {
   }
 }
 
+// Mutating tools may block on their outcome; see waits/outcomes.ts.
+function withAwait(schema: JsonObject): JsonObject {
+  const properties = isObject(schema.properties) ? schema.properties : {};
+  return {
+    ...schema,
+    properties: { ...properties, await: AWAIT_SCHEMA as JsonValue },
+  };
+}
+
 function toMcpTool(tool: RemoteToolDescriptor, offlineGame?: string): Tool {
   return {
     name: tool.name,
     description: offlineGame
       ? `${tool.description}\nOffline schema: this tool requires a running ${offlineGame} DevBench instance.`
       : tool.description,
-    inputSchema: asJsonValue(tool.inputSchema) as Tool["inputSchema"],
+    inputSchema: asJsonValue(
+      tool.readOnly ? tool.inputSchema : withAwait(tool.inputSchema),
+    ) as Tool["inputSchema"],
     ...(tool.readOnly ? { annotations: { readOnlyHint: true } } : {}),
   };
 }

@@ -25,6 +25,7 @@ import {
 } from "./session.js";
 import { createRuntimeTarget } from "./runtime.js";
 import { printSetupSnippet } from "./setup.js";
+import { createProgressSink } from "./waits/progress.js";
 
 interface CliArguments {
   command: "serve" | "setup" | "help";
@@ -68,11 +69,6 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     { name: "devbench-bridge", version: "0.1.0" },
     { capabilities: { tools: { listChanged: true } } },
   );
-  const proxy = new RemoteProxy(remote, {
-    onListChanged: async () => {
-      await server.sendToolListChanged();
-    },
-  });
   const session = new SessionController({
     config,
     platformFactory: () => new WindowsSessionPlatform(),
@@ -88,15 +84,22 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     },
   });
 
+  const proxy = new RemoteProxy(remote, {
+    onListChanged: async () => {
+      await server.sendToolListChanged();
+    },
+    environment: (instanceId) => session.waitEnvironment(instanceId),
+  });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [SESSION_TOOL, ...(await proxy.listRemoteTools())],
   }));
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const argsObject = normalizeArguments(request.params.arguments);
+    const context = { signal: extra.signal, progress: createProgressSink(extra) };
     const result =
       request.params.name === SESSION_TOOL.name
-        ? await session.handle(argsObject)
-        : await proxy.callTool(request.params.name, argsObject);
+        ? await session.handle(argsObject, context)
+        : await proxy.callTool(request.params.name, argsObject, context);
     return {
       content: [
         {

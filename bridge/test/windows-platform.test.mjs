@@ -15,8 +15,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import test from "node:test";
 
-// Mirrors PLATFORM_START_CEILING_MS once timeouts.ts exports it.
-const PLATFORM_START_MAXIMUM_MS = 60_000;
+import { PLATFORM_START_CEILING_MS } from "../dist/timeouts.js";
+
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const bridgeDirectory = path.dirname(testDirectory);
@@ -484,7 +484,7 @@ test("helper start timeout maximum is enforced", async () => {
   const helper = new HelperClient();
   try {
     const start = await helper.request(
-      startRequest(21, PLATFORM_START_MAXIMUM_MS + 1),
+      startRequest(21, PLATFORM_START_CEILING_MS + 1),
     );
     assert.equal(start.error.code, "INVALID_TIMEOUT");
   } finally {

@@ -16,6 +16,11 @@ import {
   createRuntimeTarget,
   readRuntimeIdentity,
 } from "../dist/runtime.js";
+import {
+  createFixture,
+  startGameServer,
+  writeRuntime as writeGameRuntime,
+} from "./support/fake-game.mjs";
 
 const bridgeEntry = new URL("../dist/index.js", import.meta.url).pathname.slice(1);
 
@@ -585,3 +590,37 @@ function instanceHeaders(rawHeaders) {
   }
   return { values };
 }
+
+test("MCP cancellation ends a proxied await and drops its long-poll; progress flows", async (t) => {
+  const fixture = await createFixture(t);
+  const server = await startGameServer(fixture, { loadOutcome: "hang" });
+  t.after(() => server.close());
+  await writeGameRuntime(fixture, server);
+  const { client } = await startBridge(fixture.runtimeFile, join(fixture.root, "local"));
+  t.after(() => client.close());
+
+  const messages = [];
+  let sawProgress;
+  const progressSeen = new Promise((resolve) => { sawProgress = resolve; });
+  const cancel = new AbortController();
+  const call = client.callTool(
+    { name: "game", arguments: { action: "load", name: "Fixture" } },
+    undefined,
+    {
+      signal: cancel.signal,
+      onprogress: (progress) => {
+        messages.push(progress.message);
+        sawProgress();
+      },
+    },
+  );
+  const rejected = assert.rejects(call);
+  await progressSeen;
+  assert.ok(messages.includes("lifecycle preLoadGame"), messages.join("|"));
+  const dropped = server.nextClosedAwait();
+  await server.nextHold().catch(() => undefined);
+  cancel.abort();
+  await rejected;
+  await dropped;
+  assert.equal(server.loadCalls, 1);
+});

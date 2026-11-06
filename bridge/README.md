@@ -75,7 +75,12 @@ every placeholder with an absolute Windows path.
 
 The config names the portable MO2 executable, actual profiles directory and profile,
 MO2 shim executable label, game and script extender executables, physical deployed DLL, evidence
-directory, and only the log paths that may be collected. It may pin the runtime
+directory, and only the log paths that may be collected. A log entry with
+`"crash": true` (a file, or a directory with `pattern`) is also a crash signal: a
+matching file that appears or grows during a wait fails it as `crashed`. The
+optional `exitMarker` (`{"path", "match"}`, absolute path) names the log whose
+newly appended line containing `match` (for example `[RootBuilder] Clear complete!`
+in `mo_interface.log`) proves MO2 cleanup finished after a stop. It may pin the runtime
 version and DLL SHA-256. The controller validates the profile directory and
 deployed DLL before launch; it never edits `modlist.txt`, INIs, saves, or any
 MO2/game setting.
@@ -114,27 +119,37 @@ if the bridge disconnects. Starting the shim without a pending controller
 launch fails without starting the script extender. Launcher failures are also
 written to `%LOCALAPPDATA%\devbench\launch-shim.log`.
 
-`devbench.session` actions:
+`devbench.session` actions. Every call blocks until the real event and returns its
+result; nothing sleeps, polls, or needs REST. Long calls send MCP progress
+notifications (when the request has a `progressToken`) and are cancellable.
 
 - `status`: local controller/config/job/ownership status.
-- `start`: asynchronously launch a new game through the Windows helper and wait
-  for matching runtime, process-creation, executable, loaded DLL path/hash, and
-  runtime-version evidence.
-- `wait`: block until the active job finishes, then return `status`. Returns
-  early after `timeoutMs` (default 90 s, max 120 s) with the job still running.
-- `run`: asynchronously start or reuse only the already-owned game while it is
-  still running, load the required named `fixture`, wait for the same native
-  `operationId` to succeed and for `inspect{kind:"state"}.playerLoaded`, launch
-  a server-side scenario with `async:true`, poll status and current-instance
-  progress events, collect evidence, then stop or release ownership. Read-only
-  polls retry HTTP 504 main-thread stalls for up to 30 s; mutations never retry.
-- `stop`: graceful close of the owned game, waiting up to 10 s.
-  `force:true` permits the helper's retained-handle terminate operation after
-  graceful timeout, including after an uncertain mutation. A timed-out stop keeps
-  ownership until the game exits. Without a retained game, `stop` reclaims one an
-  earlier bridge launched and never released (recorded under
-  `%LOCALAPPDATA%\devbench\owned\`).
-- `cancel`: cooperative cancellation of the active controller job.
+- `start`: launch a new game through the Windows helper, wait for the runtime
+  identity (matching `runtime.json`, process creation, executable, loaded DLL
+  path/hash, runtime version), then for `canLoad`. Returns the job result.
+- `run`: start or reuse only the already-owned game, wait for `canLoad`, load the
+  required named `fixture`, wait for `playerReady` of that `operationId`, run a
+  server-side scenario with `async:true` until its `scenario.finished` event (then
+  one `scenario status` read), collect evidence, then stop or release ownership.
+  Returns the job result.
+- `detach:true` on `start`/`run` returns `{queued, runId}` at once; `wait {runId}`
+  then blocks until that job finishes and returns `status`.
+- `wait {until}`: block on one condition against the owned game (requires a
+  started game; use the proxied `await` argument otherwise):
+  `canLoad`, `playerReady {operationId?, actionCursor?}`, `menu {name, open?}`,
+  `event {topic, match?, after?}`, `frames {count}`. Returns a wait result.
+- `stop`: request a graceful close, then wait for the game to exit, the launch shim
+  to exit (`release` is refused until it has), and, when `exitMarker` is
+  configured, for a line containing `exitMarker.match` appended after this launch.
+  Returns `{ok, exited, forced, shimExited, exitMarker: {matched, line}|null, crash?}`.
+  `force:true` terminates the game when the stop ceiling passes, including after an
+  uncertain mutation. A stop that did not finish keeps ownership. Without a
+  retained game, `stop` reclaims one an earlier bridge launched and never released
+  (recorded under `%LOCALAPPDATA%\devbench\owned\`); its marker offset is taken at
+  stop time.
+- `cancel`: cooperative cancellation of the active controller job. Cancelling the
+  MCP request of a blocking `start`/`run` does the same; cancelling a `wait` or
+  `stop` call only ends that call.
 
 Example run call:
 
@@ -164,39 +179,82 @@ lost or times out, the report says the outcome is uncertain, the mutation is
 not retried, and the controller performs no further automatic writes or stop
 until a `stop` with `force:true` ends the game.
 
-### Timeouts
+### Waits and failure signals
 
-| Bound | Default | `session.json` `timings` key |
+A wait takes an event cursor, evaluates its condition once, then long-polls
+`/api/await/events` and re-evaluates when a relevant event arrives. A state read
+that returns HTTP 503/504 means "not yet" and is re-evaluated on the next event or
+long-poll return. Results:
+
+```json
+{ "ok": true, "until": "playerReady", "satisfied": {}, "cursor": 412, "elapsedMs": 2310 }
+{ "ok": false, "until": "playerReady", "reason": "loadFailed", "detail": {}, "cursor": 409, "elapsedMs": 640 }
+```
+
+Failures come from real signals; the ceiling is only a safety net.
+
+| `reason` | Signal |
+|---|---|
+| `exited` | the owned game process exited (helper `gameExited`) |
+| `crashed` | a `"crash": true` log file was created or grew since the wait began, or exists when the game exits |
+| `stalled` | `health.stalled` not resolved by `health.resumed` within `stallMs` while the game window is foreground; `detail` carries frame and pending tasks. A stall in the background is reported in progress, not failed |
+| `modal` | a `MessageBoxMenu` opened during `canLoad`/`playerReady`; `detail.snapshot` holds its text and buttons (accept it with the `menu` tool, then wait again) |
+| `loadFailed` | the correlated load operation failed or was cancelled, or `postLoadGame {success:false}` followed the action cursor |
+| `operationFailed` | a correlated operation (such as `game save`) failed |
+| `actionsDisabled` | native game actions are disabled in the plugin config |
+| `eventHistoryLost` | the event ring dropped events the wait needed |
+| `uncorrelated` | the receipt had no field to correlate a client `await` event against |
+| `unavailable` | the listener went away, the instance changed, or the await endpoint is missing |
+| `cancelled` | MCP request cancellation or `cancel` |
+| `ceiling` | `ceilingMs` passed without any other signal |
+
+Exit and crash-log signals exist only for a game this controller launched; waits on
+a borrowed instance (proxied `await`) get `unavailable`, `stalled`, `cancelled`, and
+`ceiling`.
+
+### Proxied outcomes
+
+Mutating proxied tools accept `await`, which the bridge strips before forwarding:
+
+| `await` | Behavior |
+|---|---|
+| omitted / `true` | block on the known outcome and return `{...receipt, outcome}`: `game load` waits for `playerReady` of its `operationId`; `game save` for its operation to finish; `menu open`/`close` for that menu state; `scenario run` with `async:true` for `scenario.finished` of its `runId` |
+| `false` | return the bare receipt |
+| `{event, correlate}` | wait for `event` whose `data[correlate]` equals the receipt's `[correlate]` (for example `communityshaders_capture` with `{event:"communityshaders.capture.completed", correlate:"requestId"}`) |
+
+The call is an error when `outcome.ok` is false. A failed wait never re-sends the
+mutation. Without `after`, an `event` wait with `match` also scans events retained
+from before the wait.
+
+### Timings
+
+`timings` in `session.json` is optional; absent keys keep these defaults
+(positive integer milliseconds).
+
+| Key | Default | Meaning |
 |---|---|---|
-| Launch to health | 5 s | `healthTimeoutMs` |
-| Health to main menu (`canLoad`) | 50 s | `mainMenuTimeoutMs` |
-| Launch helper start (MO2 forward to shim ownership transfer) | 10 s (max 60 s) | `platformStartTimeoutMs` |
-| Fixture load to player ready | 10 s | `loadTimeoutMs` |
-| Scenario run | 60 s | `scenarioTimeoutMs` |
-| Graceful stop | 10 s (max 30 s) | `gracefulStopTimeoutMs` |
-| Status poll interval | 250 ms | `pollIntervalMs` |
-| Main-thread stall retry | 30 s | `mainThreadStallBudgetMs` |
+| `stallMs` | 120000 | foreground main-thread stall before a wait fails |
+| `ceilingMs` | 600000 | safety ceiling of every wait |
+| `stopCeilingMs` | 120000 | safety ceiling of each stop stage (game exit, shim exit, exit marker) |
+
+The launch handshake with MO2 has a fixed 60 s ceiling. The removed keys
+`healthTimeoutMs`, `mainMenuTimeoutMs`, `loadTimeoutMs`, `scenarioTimeoutMs`,
+`gracefulStopTimeoutMs`, `pollIntervalMs`, `platformStartTimeoutMs`, and
+`mainThreadStallBudgetMs` fail validation with the replacement named.
 
 In-scenario gates (`waitFor`, `waitUntil`) default to 10 s, steps and waits are
 capped at 30 s, the host caps a whole scenario run at 60 s, and capture defaults
-to 6 s (replay load gates inherit the 10 s gate default). Raising
-`scenarioTimeoutMs` does not raise the host's run cap.
-
-Rule for agents: after `start` or `run`, call `wait` instead of polling
-`status`, and report instead of retrying a mutation.
-
-Synchronous `scenario` calls through the proxy get an HTTP timeout of the 60 s
-run cap plus a 15 s margin (requested `timeoutMs` plus margin for `capture` and
-`papyrus`); other calls keep 30 s. The `timings` object is optional and absent
-keys keep these defaults. Overrides are positive integers in milliseconds,
-within the helper maxima above.
+to 6 s. Synchronous `scenario` calls through the proxy get an HTTP transport
+timeout of the 60 s run cap plus a 15 s margin (requested `timeoutMs` plus margin
+for `capture` and `papyrus`); other calls keep 30 s. That is a transport bound,
+not a flow wait.
 
 ## Evidence
 
 Each job creates a unique folder under `resultsDir` and atomically writes
 `result.json`. Reports distinguish `launchfailed`, `identitymismatch`,
 `loadfailed`, `scenariofailed`, `cancelled`, `cleanupfailed`, and `complete`.
-They include the controller run ID, remote instance ID, PID/creation time,
+Failures add the wait's `reason` and `detail`. Reports include the controller run ID, remote instance ID, PID/creation time,
 runtime, DLL SHA-256, source paths, expected/actual identity, transcript, and
 cleanup result.
 
@@ -260,6 +318,14 @@ The plugin's mirrored and Data-relative `runtime.json` must contain:
 `X-DevBench-Instance` headers with HTTP 409. The header remains optional for
 direct clients, but the bridge always sends exactly one. The bridge assumes no
 stronger authentication and must remain loopback only.
+
+Waits also rely on `GET /api/await/events?since=N&waitMs=M` (returns `{headSeq,
+oldestSeq, events}` at once when events after `N` exist, else holds up to
+`M` ms), `GET /api/await/frame?after=F&waitMs=M` (`{frame, advanced}`), the
+`lifecycle`, `menu`, `health.stalled`/`health.resumed`, and `scenario.*` event
+topics, and `foreground` in `inspect {kind:"health"}`. `runtime.json` is watched
+with `fs.watch`; because it is written right after the listener thread starts, a
+refused first connection is retried briefly (about 1 s) per file change.
 
 Proxy/controller tests use fake HTTP servers and injected platforms. Native
 tests use synthetic MO2/loader/game processes, including forwarding through an

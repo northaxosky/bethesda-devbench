@@ -1,72 +1,81 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import {
-  appendFile,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { SessionConfigProvider } from "../dist/config.js";
-import { RemoteClient } from "../dist/remote.js";
-import { createRuntimeTarget, processInstanceId } from "../dist/runtime.js";
-import { SessionController } from "../dist/session.js";
+import {
+  FakePlatform,
+  createController,
+  createFixture,
+  startGameServer,
+} from "./support/fake-game.mjs";
 
-test("session run orchestrates fixture, scenario, evidence, and graceful stop", async (t) => {
-  const fixture = await createFixture(t);
-  const server = await startWorkflowServer(fixture, { scenarioOk: true });
+const RUN = { action: "run", fixture: "DevBenchFixture01", steps: [] };
+
+async function setup(t, { server: serverOptions = {}, platform: platformOptions = {}, timings, config } = {}) {
+  const fixture = await createFixture(t, config);
+  const server = await startGameServer(fixture, serverOptions);
   t.after(() => server.close());
-  const platform = new FakePlatform(fixture, { closeExits: true, server });
-  const controller = createController(fixture, platform);
+  const platform = new FakePlatform(fixture, { closeExits: true, server, ...platformOptions });
+  const controller = createController(fixture, platform, timings);
   t.after(() => controller.shutdown());
+  return { fixture, server, platform, controller };
+}
 
-  const queued = await controller.handle({
-    action: "run",
-    fixture: "DevBenchFixture01",
+test("run orchestrates fixture, scenario, evidence, and graceful stop", async (t) => {
+  const { server, platform, controller } = await setup(t);
+  const result = await controller.handle({
+    ...RUN,
     steps: [{ assert: { tool: "inspect", args: { kind: "state" }, path: "/playerLoaded", eq: true } }],
   });
-  assert.equal(queued.isError, false);
-  const runId = queued.value.runId;
-  const status = await waitForJob(controller, runId);
-  assert.equal(status.job.result.ok, true);
-  assert.equal(status.job.result.phase, "complete");
-  assert.equal(status.job.result.fixture, "DevBenchFixture01");
+  assert.equal(result.isError, false, JSON.stringify(result.value));
+  const report = result.value;
+  assert.equal(report.phase, "complete");
+  assert.equal(report.fixture, "DevBenchFixture01");
   assert.equal(platform.closeCalls, 1);
   assert.equal(platform.terminateCalls, 0);
   assert.equal(platform.releaseCalls, 1);
+  assert.equal(platform.releasedWhileShimRunning, false);
   assert.equal(server.loadCalls, 1);
   assert.equal(server.scenarioRunCalls, 1);
-  assert.ok(status.job.result.transcript.some((entry) => entry.stage === "load.ready"));
-  assert.equal(status.job.result.evidence.logs.length, 1);
-  const saved = JSON.parse(
-    await readFile(status.job.result.evidence.resultPath, "utf8"),
+  assert.deepEqual(
+    report.transcript.filter((entry) => entry.result?.until).map((entry) => entry.stage),
+    ["canLoad", "playerReady", "scenario"],
   );
+  assert.equal(report.cleanup.shimExited, true);
+  assert.equal(report.evidence.logs.length, 1);
+  const saved = JSON.parse(await readFile(report.evidence.resultPath, "utf8"));
   assert.equal(saved.phase, "complete");
 });
 
-test("leave-running releases ownership and a later stop is refused", async (t) => {
-  const fixture = await createFixture(t);
-  const server = await startWorkflowServer(fixture, { scenarioOk: true });
-  t.after(() => server.close());
-  const platform = new FakePlatform(fixture, { closeExits: true, server });
-  const controller = createController(fixture, platform);
-  t.after(() => controller.shutdown());
-
-  const queued = await controller.handle({
-    action: "run",
-    fixture: "DevBenchFixture02",
-    steps: [],
-    finish: "leave-running",
+test("start blocks until canLoad and detach returns the job id at once", async (t) => {
+  const { fixture, server, platform, controller } = await setup(t, {
+    server: { ready: false },
   });
-  const status = await waitForJob(controller, queued.value.runId);
-  assert.equal(status.job.result.ok, true);
-  assert.equal(status.job.result.cleanup.released, true);
+  const blocking = controller.handle({ action: "start" });
+  await server.nextHold().catch(() => undefined);
+  setTimeout(() => server.becomeReady(), 20);
+  const started = await blocking;
+  assert.equal(started.isError, false, JSON.stringify(started.value));
+  assert.equal(started.value.phase, "complete");
+  assert.equal(started.value.transcript.at(-1).stage, "canLoad");
+  assert.equal(controller.status().ownership.owned, true);
+  assert.equal((await controller.handle({ action: "stop" })).isError, false);
+
+  const detached = createController(fixture, platform);
+  t.after(() => detached.shutdown());
+  const queued = await detached.handle({ action: "start", detach: true });
+  assert.equal(queued.value.queued, true);
+  const waited = await detached.handle({ action: "wait", runId: queued.value.runId });
+  assert.equal(waited.value.job.state, "done");
+  assert.equal(waited.value.job.result.ok, true);
+});
+
+test("leave-running releases ownership and a later stop is refused", async (t) => {
+  const { platform, controller } = await setup(t);
+  const result = await controller.handle({ ...RUN, finish: "leave-running" });
+  assert.equal(result.value.ok, true);
+  assert.equal(result.value.cleanup.released, true);
   assert.equal(platform.closeCalls, 0);
   assert.equal(platform.releaseCalls, 1);
 
@@ -75,22 +84,125 @@ test("leave-running releases ownership and a later stop is refused", async (t) =
   assert.match(stop.value.reason, /does not own/);
 });
 
-test("run waits for native load availability after the HTTP listener starts", async (t) => {
-  const fixture = await createFixture(t);
-  const server = await startWorkflowServer(fixture, { scenarioOk: true, bootPolls: 3 });
-  t.after(() => server.close());
-  const platform = new FakePlatform(fixture, { closeExits: true, server });
-  const controller = createController(fixture, platform);
-  t.after(() => controller.shutdown());
-  const queued = await controller.handle({
-    action: "run", fixture: "DevBenchFixture01", steps: [],
+test("run waits for the game to reach canLoad after the listener is up", async (t) => {
+  const { server, controller } = await setup(t, {
+    server: { ready: false, bootDelayMs: 20 },
   });
-  const status = await waitForJob(controller, queued.value.runId);
-  assert.equal(status.job.result.ok, true);
+  const result = await controller.handle(RUN);
+  assert.equal(result.value.ok, true, JSON.stringify(result.value));
   assert.equal(server.loadCalls, 1);
 });
 
-test("stop never adopts borrowed games and force is explicit", async (t) => {
+test("a failed load ends the run at once with loadFailed, not at the ceiling", async (t) => {
+  const { server, platform, controller } = await setup(t, {
+    server: { loadOutcome: "fail" },
+  });
+  const result = await controller.handle(RUN);
+  assert.equal(result.isError, true);
+  assert.equal(result.value.phase, "loadfailed");
+  assert.equal(result.value.reason, "loadFailed");
+  assert.equal(server.loadCalls, 1);
+  assert.equal(platform.closeCalls, 1);
+});
+
+test("a game that exits mid-wait fails the wait as exited", async (t) => {
+  const { server, platform, controller } = await setup(t, {
+    server: { loadOutcome: "hang" },
+  });
+  const pending = controller.handle(RUN);
+  await server.nextHold();
+  platform.exitGame(1);
+  const result = await pending;
+  assert.equal(result.value.phase, "loadfailed");
+  assert.equal(result.value.reason, "exited");
+  assert.equal(result.value.detail.exitCode, 1);
+  assert.equal(result.value.cleanup.alreadyExited, true);
+});
+
+test("a crash log written before the exit classifies the failure as crashed", async (t) => {
+  const { fixture, server, platform, controller } = await setup(t, {
+    server: { loadOutcome: "hang" },
+  });
+  const pending = controller.handle(RUN);
+  await server.nextHold();
+  const crashLog = join(fixture.crashDir, "crash-2026.log");
+  await writeFile(crashLog, "Unhandled exception");
+  platform.exitGame(139);
+  const result = await pending;
+  assert.equal(result.value.reason, "crashed");
+  assert.equal(result.value.detail.path, crashLog);
+});
+
+test("the game exiting before DevBench is ready is a launch failure", async (t) => {
+  const { platform, controller } = await setup(t, {
+    platform: { exitOnStart: true, server: undefined },
+  });
+  const result = await controller.handle({ action: "start" });
+  assert.equal(result.value.phase, "launchfailed");
+  assert.equal(result.value.reason, "exited");
+  assert.match(result.value.error, /exited before DevBench became ready/);
+  assert.equal(result.value.pid, 5501);
+  assert.equal(platform.startCalls, 1);
+});
+
+test("a transient main-thread 504 is re-evaluated on the next event", async (t) => {
+  const { server, controller } = await setup(t, { server: { inspectStalls: 2 } });
+  const result = await controller.handle(RUN);
+  assert.equal(result.value.ok, true, JSON.stringify(result.value));
+  assert.equal(server.loadCalls, 1);
+});
+
+test("stop waits for the shim exit and for a marker line written after this launch", async (t) => {
+  const markerLine = "[RootBuilder] Clear complete!";
+  const fixture = await createFixture(t, {});
+  const config = JSON.parse(await readFile(fixture.configFile, "utf8"));
+  config.exitMarker = { path: fixture.marker, match: markerLine };
+  await writeFile(fixture.configFile, JSON.stringify(config));
+  await writeFile(fixture.marker, `${markerLine} run 1\nunrelated\n`);
+  const server = await startGameServer(fixture);
+  t.after(() => server.close());
+  const platform = new FakePlatform(fixture, {
+    closeExits: true,
+    server,
+    shimExitDelayMs: 20,
+    onShimExit: () => setTimeout(() => {
+      appendFile(fixture.marker, `${markerLine} run 2\n`).catch(() => undefined);
+    }, 20),
+  });
+  const controller = createController(fixture, platform);
+  t.after(() => controller.shutdown());
+
+  assert.equal((await controller.handle({ action: "start" })).value.ok, true);
+  const stop = await controller.handle({ action: "stop" });
+  assert.equal(stop.isError, false, JSON.stringify(stop.value));
+  assert.equal(stop.value.shimExited, true);
+  assert.equal(stop.value.exitMarker.matched, true);
+  assert.equal(stop.value.exitMarker.line, `${markerLine} run 2`);
+  assert.equal(platform.releasedWhileShimRunning, false);
+});
+
+test("a marker line from an earlier launch never satisfies stop", async (t) => {
+  const markerLine = "[RootBuilder] Clear complete!";
+  const fixture = await createFixture(t, {});
+  const config = JSON.parse(await readFile(fixture.configFile, "utf8"));
+  config.exitMarker = { path: fixture.marker, match: markerLine };
+  await writeFile(fixture.configFile, JSON.stringify(config));
+  await writeFile(fixture.marker, `${markerLine} run 1\n`);
+  const server = await startGameServer(fixture);
+  t.after(() => server.close());
+  const platform = new FakePlatform(fixture, { closeExits: true, server });
+  const controller = createController(fixture, platform, { stopCeilingMs: 150 });
+  t.after(() => controller.shutdown());
+
+  assert.equal((await controller.handle({ action: "start" })).value.ok, true);
+  const stop = await controller.handle({ action: "stop" });
+  assert.equal(stop.isError, true);
+  assert.equal(stop.value.exited, true);
+  assert.equal(stop.value.exitMarker.matched, false);
+  assert.equal(stop.value.exitMarker.reason, "ceiling");
+});
+
+test("stop never adopts borrowed games and force terminates at the stop ceiling", async (t) => {
   const fixture = await createFixture(t);
   const idlePlatform = new FakePlatform(fixture, { closeExits: true });
   const idleController = createController(fixture, idlePlatform);
@@ -99,35 +211,26 @@ test("stop never adopts borrowed games and force is explicit", async (t) => {
   assert.equal(borrowedStop.isError, true);
   assert.equal(idlePlatform.terminateCalls, 0);
 
-  const server = await startWorkflowServer(fixture, { scenarioOk: true });
-  t.after(() => server.close());
-  const forcePlatform = new FakePlatform(fixture, { closeExits: false, server });
-  const forceController = createController(fixture, forcePlatform);
-  t.after(() => forceController.shutdown());
-  const queued = await forceController.handle({
-    action: "run",
-    fixture: "DevBenchFixture03",
-    steps: [],
-    forceStop: true,
+  const { platform, controller } = await setup(t, {
+    platform: { closeExits: false },
+    timings: { stopCeilingMs: 50 },
   });
-  const status = await waitForJob(forceController, queued.value.runId);
-  assert.equal(status.job.result.ok, true);
-  assert.equal(status.job.result.cleanup.forced, true);
-  assert.equal(forcePlatform.closeCalls, 1);
-  assert.equal(forcePlatform.terminateCalls, 1);
+  const result = await controller.handle({ ...RUN, forceStop: true });
+  assert.equal(result.value.ok, true, JSON.stringify(result.value));
+  assert.equal(result.value.cleanup.forced, true);
+  assert.equal(platform.closeCalls, 1);
+  assert.equal(platform.terminateCalls, 1);
 });
 
 test("a new bridge reclaims and force-stops a game an earlier bridge left running", async (t) => {
-  const fixture = await createFixture(t);
-  const server = await startWorkflowServer(fixture, { scenarioOk: true });
-  t.after(() => server.close());
-  const platform = new FakePlatform(fixture, { closeExits: false, server });
-  const first = createController(fixture, platform);
-  const started = await first.handle({ action: "start" });
-  assert.equal((await waitForJob(first, started.value.runId)).job.result.ok, true);
+  const { fixture, platform, controller: first } = await setup(t, {
+    platform: { closeExits: false },
+    timings: { stopCeilingMs: 50 },
+  });
+  assert.equal((await first.handle({ action: "start" })).value.ok, true);
   await first.shutdown();
 
-  const second = createController(fixture, platform);
+  const second = createController(fixture, platform, { stopCeilingMs: 50 });
   t.after(() => second.shutdown());
   const stop = await second.handle({ action: "stop", force: true });
   assert.equal(stop.isError, false, JSON.stringify(stop.value));
@@ -141,18 +244,27 @@ test("a new bridge reclaims and force-stops a game an earlier bridge left runnin
   assert.match(again.value.reason, /does not own/);
 });
 
-test("force stops a game after an uncertain mutation and clears the uncertainty", async (t) => {
-  const fixture = await createFixture(t);
-  const server = await startWorkflowServer(fixture, { scenarioOk: true, dropLoad: true });
-  t.after(() => server.close());
-  const platform = new FakePlatform(fixture, { closeExits: true, server });
-  const controller = createController(fixture, platform);
-  t.after(() => controller.shutdown());
-  const queued = await controller.handle({
-    action: "run", fixture: "DevBenchFixture01", steps: [],
+test("stopping a reclaimed game whose shim is gone does not wait for shim exit", async (t) => {
+  const { fixture, platform, controller: first } = await setup(t, {
+    platform: { closeExits: true, reclaimWithoutShim: true },
+    timings: { stopCeilingMs: 60_000 },
   });
-  const status = await waitForJob(controller, queued.value.runId);
-  assert.equal(status.uncertainWrite, true, JSON.stringify(status.job.result));
+  assert.equal((await first.handle({ action: "start" })).value.ok, true);
+  await first.shutdown();
+
+  const second = createController(fixture, platform, { stopCeilingMs: 60_000 });
+  t.after(() => second.shutdown());
+  const started = performance.now();
+  const stop = await second.handle({ action: "stop" });
+  assert.equal(stop.isError, false, JSON.stringify(stop.value));
+  assert.equal(stop.value.shimExited, true);
+  assert.ok(performance.now() - started < 5_000, "stop waited on the ceiling");
+});
+
+test("force stops a game after an uncertain mutation and clears the uncertainty", async (t) => {
+  const { platform, controller } = await setup(t, { server: { dropLoad: true } });
+  const result = await controller.handle(RUN);
+  assert.equal(controller.status().uncertainWrite, true, JSON.stringify(result.value));
   assert.equal(platform.closeCalls, 0);
 
   const refused = await controller.handle({ action: "stop" });
@@ -165,436 +277,89 @@ test("force stops a game after an uncertain mutation and clears the uncertainty"
 });
 
 test("scenario failure is not a pass and still captures fresh evidence", async (t) => {
-  const fixture = await createFixture(t);
-  const server = await startWorkflowServer(fixture, { scenarioOk: false });
-  t.after(() => server.close());
-  const platform = new FakePlatform(fixture, { closeExits: true, server });
-  const controller = createController(fixture, platform);
-  t.after(() => controller.shutdown());
-
-  const queued = await controller.handle({
-    action: "run",
-    fixture: "DevBenchFixture04",
-    steps: [{ wait: 1 }],
-  });
-  const status = await waitForJob(controller, queued.value.runId);
-  assert.equal(status.job.result.ok, false);
-  assert.equal(status.job.result.phase, "scenariofailed");
-  assert.equal(status.job.result.scenario, undefined);
+  const { platform, controller } = await setup(t, { server: { scenarioOk: false } });
+  const result = await controller.handle({ ...RUN, steps: [{ wait: 1 }] });
+  assert.equal(result.value.ok, false);
+  assert.equal(result.value.phase, "scenariofailed");
+  assert.equal(result.value.scenario, undefined);
   assert.equal(platform.closeCalls, 1);
-  assert.equal(status.job.result.evidence.logs.length, 1);
-  assert.match(
-    JSON.stringify(status.job.result),
-    /scenario completed without ok=true/,
-  );
+  assert.equal(result.value.evidence.logs.length, 1);
+  assert.match(JSON.stringify(result.value), /scenario completed without ok=true/);
 });
 
 test("native identity mismatch fails closed and cleans only the owned process", async (t) => {
-  const fixture = await createFixture(t);
-  const server = await startWorkflowServer(fixture, { scenarioOk: true });
-  t.after(() => server.close());
-  const platform = new FakePlatform(fixture, {
-    closeExits: true,
-    server,
-    pluginPath: join(dirname(fixture.dll), "wrong-devbench.dll"),
-  });
-  const controller = createController(fixture, platform);
-  t.after(() => controller.shutdown());
-
-  const queued = await controller.handle({ action: "start" });
-  const status = await waitForJob(controller, queued.value.runId);
-  assert.equal(status.job.result.ok, false);
-  assert.equal(status.job.result.phase, "identitymismatch");
+  const { fixture, platform, controller } = await setup(t);
+  platform.options.pluginPath = join(dirname(fixture.dll), "wrong-devbench.dll");
+  const result = await controller.handle({ action: "start" });
+  assert.equal(result.value.ok, false);
+  assert.equal(result.value.phase, "identitymismatch");
   assert.equal(platform.closeCalls, 1);
   assert.equal(platform.terminateCalls, 0);
 });
 
-test("startup timeout is a launch failure with owned-process evidence and cleanup", async (t) => {
-  const fixture = await createFixture(t);
-  await writeFile(
-    fixture.runtimeFile,
-    JSON.stringify({
-      port: 65534,
-      pid: 5501,
-      instanceId: "5501-01DC000000000009",
-      exePath: fixture.gameExe,
-      runtime: "1.11.240.0",
-      dllPath: fixture.dll,
-    }),
-  );
-  const platform = new FakePlatform(fixture, { closeExits: true });
-  const controller = createController(fixture, platform, {
-    healthTimeoutMs: 40,
-    pollIntervalMs: 5,
+test("a game that exits after a timed-out stop is never reused by the next run", async (t) => {
+  const { platform, controller } = await setup(t, {
+    platform: { closeExits: false },
+    timings: { stopCeilingMs: 50 },
   });
-  t.after(() => controller.shutdown());
+  const first = await controller.handle(RUN);
+  assert.equal(first.value.phase, "cleanupfailed");
+  assert.equal(controller.status().ownership.owned, true);
+  const firstInstance = first.value.instanceId;
 
-  const queued = await controller.handle({ action: "start" });
-  const status = await waitForJob(controller, queued.value.runId);
-  assert.equal(status.job.result.ok, false);
-  assert.equal(status.job.result.phase, "launchfailed");
-  assert.equal(status.job.result.pid, 5501);
+  platform.running = false;
+  platform.options.closeExits = true;
+  const second = await controller.handle(RUN);
+  assert.equal(second.value.ok, true, JSON.stringify(second.value));
+  assert.equal(platform.startCalls, 2);
+  assert.notEqual(second.value.instanceId, firstInstance);
+});
+
+test("cancelling a blocking run cancels the job and stops the owned game", async (t) => {
+  const { server, platform, controller } = await setup(t, {
+    server: { loadOutcome: "hang" },
+  });
+  const request = new AbortController();
+  const pending = controller.handle(RUN, { signal: request.signal });
+  await server.nextHold();
+  request.abort();
+  const result = await pending;
+  assert.equal(result.value.phase, "cancelled");
+  assert.equal(result.value.reason, "cancelled");
   assert.equal(platform.closeCalls, 1);
 });
 
-test("a post-load main-thread stall is retried for read-only readiness", async (t) => {
-  const fixture = await createFixture(t);
-  const server = await startWorkflowServer(fixture, { scenarioOk: true, inspectStalls: 2 });
-  t.after(() => server.close());
-  const platform = new FakePlatform(fixture, { closeExits: true, server });
-  const controller = createController(fixture, platform);
-  t.after(() => controller.shutdown());
+test("wait until runs a condition against the owned game and ends on cancellation", async (t) => {
+  const { server, controller } = await setup(t);
+  assert.equal((await controller.handle({ action: "start" })).value.ok, true);
 
-  const queued = await controller.handle({
-    action: "run", fixture: "DevBenchFixture01", steps: [],
-  });
-  const status = await waitForJob(controller, queued.value.runId);
-  assert.equal(status.job.result.ok, true);
-  assert.equal(server.loadCalls, 1);
-  assert.equal(
-    status.job.result.transcript.filter((entry) => entry.stage === "observe.retry").length,
-    2,
+  const menu = controller.handle({ action: "wait", until: "menu", name: "PipboyMenu" });
+  await server.nextHold();
+  server.publish("menu", { name: "MessageBoxMenu", opening: true });
+  server.publish("menu", { name: "PipboyMenu", opening: true });
+  const opened = await menu;
+  assert.equal(opened.value.ok, true);
+  assert.equal(opened.value.satisfied.event.data.name, "PipboyMenu");
+
+  const request = new AbortController();
+  const frames = controller.handle(
+    { action: "wait", until: "frames", count: 1_000_000 },
+    { signal: request.signal },
   );
+  await server.nextHold();
+  request.abort();
+  assert.equal((await frames).value.reason, "cancelled");
+
+  const refused = await controller.handle({ action: "wait", until: "canLoad", timeoutMs: 5 });
+  assert.equal(refused.isError, true);
+  assert.match(refused.value.reason, /timeoutMs was removed/);
 });
 
-test("a game that exits after a timed-out stop is never reused by the next run", async (t) => {
+test("wait until needs a controller-owned game", async (t) => {
   const fixture = await createFixture(t);
-  const server = await startWorkflowServer(fixture, { scenarioOk: true });
-  t.after(() => server.close());
-  const platform = new FakePlatform(fixture, { closeExits: false, server });
-  const controller = createController(fixture, platform);
+  const controller = createController(fixture, new FakePlatform(fixture));
   t.after(() => controller.shutdown());
-
-  const first = await controller.handle({
-    action: "run", fixture: "DevBenchFixture01", steps: [],
-  });
-  const firstStatus = await waitForJob(controller, first.value.runId);
-  assert.equal(firstStatus.job.result.phase, "cleanupfailed");
-  assert.equal(firstStatus.ownership.owned, true);
-  const firstInstance = firstStatus.job.result.instanceId;
-
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  platform.running = false;
-  platform.options.closeExits = true;
-  const second = await controller.handle({
-    action: "run", fixture: "DevBenchFixture01", steps: [],
-  });
-  const secondStatus = await waitForJob(controller, second.value.runId);
-  assert.equal(secondStatus.job.result.ok, true);
-  assert.equal(platform.startCalls, 2);
-  assert.notEqual(secondStatus.job.result.instanceId, firstInstance);
+  const result = await controller.handle({ action: "wait", until: "canLoad" });
+  assert.equal(result.isError, true);
+  assert.match(result.value.reason, /controller owns/);
 });
-
-class FakePlatform {
-  constructor(fixture, options) {
-    this.fixture = fixture;
-    this.options = options;
-    this.owned = false;
-    this.running = false;
-    this.creationTime = "2026-09-15T17:00:00.000Z";
-    this.startCalls = 0;
-    this.closeCalls = 0;
-    this.terminateCalls = 0;
-    this.releaseCalls = 0;
-    this.reclaimCalls = 0;
-    this.recorded = false;
-  }
-
-  async start() {
-    if (this.running) throw new Error("existing game");
-    this.startCalls++;
-    this.owned = true;
-    this.recorded = true;
-    this.running = true;
-    this.creationTime = new Date().toISOString();
-    const server = this.options.server;
-    if (server) {
-      server.identity.instanceId = processInstanceId(5501, this.creationTime);
-      await writeRuntime(this.fixture.runtimeFile, server.identity);
-    }
-    return this.process();
-  }
-
-  async status() {
-    return this.owned
-      ? this.process()
-      : { owned: false, running: this.running };
-  }
-
-  async inspect() {
-    return {
-      pid: 5501,
-      creationTime: this.creationTime,
-      exe: this.fixture.gameExe,
-      running: this.running,
-      runtimeVersion: "1.11.240.0",
-      plugin: {
-        path: this.options.pluginPath ?? this.fixture.dll,
-        sha256: this.fixture.dllSha256,
-      },
-    };
-  }
-
-  async close() {
-    this.closeCalls++;
-    if (this.options.closeExits) this.running = this.recorded = false;
-    return this.options.closeExits
-      ? { exited: true, owned: true }
-      : { exited: false, owned: true, reason: "timeout" };
-  }
-
-  async terminate() {
-    this.terminateCalls++;
-    this.running = this.recorded = false;
-    return { exited: true, owned: true };
-  }
-
-  async release() {
-    this.releaseCalls++;
-    this.owned = false;
-    this.recorded = false;
-  }
-
-  async reclaim() {
-    if (this.owned || !this.recorded || !this.running) throw new Error("NO_RECLAIMABLE_GAME");
-    this.reclaimCalls++;
-    this.owned = true;
-    return this.process();
-  }
-
-  async shutdown() {
-    this.owned = false;
-  }
-
-  process() {
-    return {
-      owned: true,
-      running: this.running,
-      pid: 5501,
-      creationTime: this.creationTime,
-      exe: this.fixture.gameExe,
-      mo2Pid: 5500,
-    };
-  }
-}
-
-function createController(fixture, platform, timingOverrides = {}) {
-  const config = new SessionConfigProvider({
-    configPath: fixture.configFile,
-    explicit: true,
-    localAppData: fixture.root,
-  });
-  return new SessionController({
-    config,
-    platformFactory: () => platform,
-    remoteFactory: () =>
-      new RemoteClient(
-        createRuntimeTarget({
-          game: "fo4",
-          runtimeFile: fixture.runtimeFile,
-          localAppData: join(fixture.root, "empty-local"),
-        }),
-        { discoveryTimeoutMs: 100, callTimeoutMs: 500 },
-      ),
-    timings: {
-      healthTimeoutMs: 1_000,
-      mainMenuTimeoutMs: 1_000,
-      loadTimeoutMs: 1_000,
-      scenarioTimeoutMs: 1_000,
-      gracefulStopTimeoutMs: 50,
-      platformStartTimeoutMs: 100,
-      pollIntervalMs: 5,
-      ...timingOverrides,
-    },
-  });
-}
-
-async function createFixture(t) {
-  const root = await mkdtemp(join(tmpdir(), "devbench-session-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const profileDir = join(root, "profiles", "DevBench");
-  const resultsDir = join(root, "results");
-  await mkdir(profileDir, { recursive: true });
-  await mkdir(resultsDir, { recursive: true });
-  const mo2Exe = join(root, "ModOrganizer.exe");
-  const gameExe = join(root, "Fallout4.exe");
-  const dll = join(root, "devbench.dll");
-  const log = join(root, "devbench.log");
-  const runtimeFile = join(root, "runtime.json");
-  const configFile = join(root, "session.json");
-  await writeFile(mo2Exe, "fake");
-  await writeFile(gameExe, "fake");
-  await writeFile(dll, "devbench-test-dll");
-  await writeFile(log, "old log line\n");
-  const dllSha256 = createHash("sha256")
-    .update("devbench-test-dll")
-    .digest("hex");
-  await writeFile(
-    configFile,
-    JSON.stringify({
-      mo2Exe,
-      profilesDir: join(root, "profiles"),
-      profile: "DevBench",
-      executable: "Fallout 4",
-      gameExe,
-      loaderExe: join(root, "f4se_loader.exe"),
-      devbenchDll: dll,
-      runtimeFile,
-      expectedRuntime: "1.11.240.0",
-      expectedDllSha256: dllSha256,
-      resultsDir,
-      logs: [{ path: log, maxBytes: 4096 }],
-    }),
-  );
-  return {
-    root,
-    mo2Exe,
-    gameExe,
-    dll,
-    log,
-    runtimeFile,
-    configFile,
-    dllSha256,
-  };
-}
-
-async function startWorkflowServer(fixture, options) {
-  const identity = {
-    port: 0,
-    pid: 5501,
-    instanceId: "5501-01DC000000000008",
-    exePath: fixture.gameExe,
-    runtime: "1.11.240.0",
-    dllPath: fixture.dll,
-  };
-  let gameStatusCalls = 0;
-  let scenarioStatusCalls = 0;
-  const state = {
-    identity,
-    loadCalls: 0,
-    scenarioRunCalls: 0,
-    inspectStalls: options.inspectStalls ?? 0,
-  };
-  const server = createServer(async (request, response) => {
-    if (request.headers["x-devbench-instance"] !== identity.instanceId) {
-      return json(response, { error: "instance mismatch" }, 409);
-    }
-    if (request.method === "GET" && request.url === "/api/health") {
-      return json(response, { ok: true, ...identity });
-    }
-    if (request.method === "GET" && request.url?.startsWith("/api/events")) {
-      return json(response, {
-        headSeq: 50 + scenarioStatusCalls,
-        events:
-          scenarioStatusCalls > 0
-            ? [
-                {
-                  seq: 50 + scenarioStatusCalls,
-                  topic: "scenario.step",
-                  data: { runId: 77 },
-                },
-              ]
-            : [],
-      });
-    }
-    const match = request.url?.match(/^\/api\/tool\/([^/?]+)$/);
-    if (request.method !== "POST" || !match) {
-      return json(response, { error: "not found" }, 404);
-    }
-    const args = await readBody(request);
-    const tool = decodeURIComponent(match[1]);
-    if (tool === "game" && args.action === "load") {
-      if (gameStatusCalls < (options.bootPolls ?? 1)) {
-        return json(response, { error: "load attempted before game initialization" }, 409);
-      }
-      state.loadCalls++;
-      if (options.dropLoad) return request.socket.destroy();
-      return json(response, {
-        queued: true,
-        operationId: 31,
-        actionCursor: 10,
-      });
-    }
-    if (tool === "game" && args.action === "status") {
-      gameStatusCalls++;
-      return json(response, {
-        actionsAllowed: true,
-        gameLoaded: gameStatusCalls >= (options.bootPolls ?? 1),
-        canLoad: gameStatusCalls >= (options.bootPolls ?? 1),
-        operation: {
-          operationId: 31,
-          phase: gameStatusCalls > 1 ? "succeeded" : "queued",
-          success: gameStatusCalls > 1 ? true : null,
-        },
-      });
-    }
-    if (tool === "inspect") {
-      if (state.inspectStalls-- > 0) {
-        return json(response, {
-          code: 504,
-          error: "main-thread task did not start within 5000ms; queued task abandoned",
-        }, 504);
-      }
-      return json(response, { playerLoaded: true });
-    }
-    if (tool === "scenario" && args.action === "run") {
-      state.scenarioRunCalls++;
-      await appendFile(fixture.log, "current run line\n");
-      return json(response, { queued: true, runId: 77 });
-    }
-    if (tool === "scenario" && args.action === "status") {
-      scenarioStatusCalls++;
-      return json(response, {
-        runId: 77,
-        done: scenarioStatusCalls > 1,
-        ...(scenarioStatusCalls > 1
-          ? {
-              ok: options.scenarioOk,
-              result: {
-                ok: options.scenarioOk,
-                transcript: [{ index: 0, ok: options.scenarioOk }],
-                ...(options.scenarioOk ? {} : { error: "assertion failed" }),
-              },
-            }
-          : { status: "running" }),
-      });
-    }
-    if (tool === "scenario" && args.action === "cancel") {
-      return json(response, { runId: 77, cancelRequested: true });
-    }
-    return json(response, { error: "unexpected call" }, 400);
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  identity.port = server.address().port;
-  state.close = () =>
-    new Promise((resolve) => {
-      if (!server.listening) resolve();
-      else server.close(resolve);
-    });
-  return state;
-}
-
-async function writeRuntime(path, identity) {
-  await writeFile(path, JSON.stringify(identity));
-}
-
-async function waitForJob(controller, runId) {
-  const waited = await controller.handle({ action: "wait", runId, timeoutMs: 5_000 });
-  assert.equal(waited.isError, false, JSON.stringify(waited.value));
-  const status = waited.value;
-  if (status.job?.runId !== runId || status.job.state !== "done") {
-    assert.fail(`timed out waiting for ${runId}`);
-  }
-  return status;
-}
-
-async function readBody(request) {
-  let body = "";
-  for await (const chunk of request) body += chunk;
-  return body ? JSON.parse(body) : {};
-}
-
-function json(response, body, status = 200) {
-  response.writeHead(status, { "Content-Type": "application/json" });
-  response.end(JSON.stringify(body));
-}

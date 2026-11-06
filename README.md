@@ -79,7 +79,7 @@ EcoQoS. `inspect` `kind=state` reports `window`: `foreground` (live),
 Use the companion for restart-surviving MCP, or connect directly to
 `http://127.0.0.1:<port>/mcp` (defaults: FO4 8930, Skyrim 8920, VR 8921).
 REST exposes `/api/health`, `/api/tools`,
-`/api/events`, and `POST /api/tool/{name}`. The selected port and instance
+`/api/events`, `/api/await/events`, `/api/await/frame`, and `POST /api/tool/{name}`. The selected port and instance
 identity are mirrored at `%LOCALAPPDATA%\devbench\<fo4|se|vr>\runtime.json`.
 
 ## Safety
@@ -94,10 +94,14 @@ identity are mirrored at `%LOCALAPPDATA%\devbench\<fo4|se|vr>\runtime.json`.
 - Never close MO2 before the game and its launch shim exit and RootBuilder
   cleanup completes.
 
-## Timeouts
+## Waiting
 
-Every wait has a short bound; see the [bridge timeout table](bridge/README.md#timeouts)
-for the values, the polling rule, and the `session.json` overrides.
+MCP clients never sleep or poll. `devbench.session` calls and proxied mutations
+(`game load`, `menu open`, async `scenario run`, or any tool with
+`await: {event, correlate}`) block until the real event and fail at once on a real
+signal (game exit, crash log, stall, modal, load failure, cancellation); a safety
+ceiling is only a last resort. Event feeds are `GET /api/await/events` and
+`GET /api/await/frame`. See [Waits and failure signals](bridge/README.md#waits-and-failure-signals).
 
 ## Source
 
