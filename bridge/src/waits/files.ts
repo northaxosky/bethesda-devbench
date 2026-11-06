@@ -19,10 +19,12 @@ export function awaitFileProbe<T>(options: {
   targets: readonly WatchTarget[];
   probe: () => Promise<T | undefined>;
   signal: AbortSignal;
+  recheckMs?: number;
 }): Promise<T> {
-  const { targets, probe, signal } = options;
+  const { targets, probe, signal, recheckMs } = options;
   return new Promise<T>((resolve, reject) => {
     const watchers: FSWatcher[] = [];
+    let recheck: NodeJS.Timeout | undefined;
     let settled = false;
     let running = false;
     let dirty = false;
@@ -32,6 +34,7 @@ export function awaitFileProbe<T>(options: {
       settled = true;
       signal.removeEventListener("abort", onAbort);
       for (const watcher of watchers) watcher.close();
+      clearInterval(recheck);
       settle();
     };
     const onAbort = (): void => {
@@ -74,6 +77,7 @@ export function awaitFileProbe<T>(options: {
       finish(() => reject(asError(error)));
       return;
     }
+    if (recheckMs !== undefined) recheck = setInterval(() => void run(), recheckMs);
     void run();
   });
 }
@@ -123,6 +127,10 @@ export interface MarkerSearch {
   offset: number;
 }
 
+// Windows defers change notifications for a file another process keeps open
+// (MO2 holds its log), so appended lines are also re-read on this interval.
+const HELD_OPEN_RECHECK_MS = 250;
+
 /** Resolves with the first line containing `match` appended after `offset`. */
 export function awaitMarkerLine(
   search: MarkerSearch,
@@ -133,6 +141,7 @@ export function awaitMarkerLine(
   return awaitFileProbe({
     targets: [fileTarget(search.path)],
     signal,
+    recheckMs: HELD_OPEN_RECHECK_MS,
     probe: async () => {
       let handle;
       try {

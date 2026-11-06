@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -334,4 +334,20 @@ test("a marker search reads only appended lines and survives truncation", async 
   await appendFile(path, "unrelated line\n");
   await writeFile(path, "rotated\nClear complete! new\n");
   assert.equal(await found, "Clear complete! new");
+});
+
+// MO2 keeps its log open; Windows sends no change event for such appends.
+test("a marker appended through a held-open handle is still found", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devbench-marker-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, "mo.log");
+  await writeFile(path, "old\n");
+  const writer = await open(path, "a");
+  t.after(() => writer.close());
+  const controller = new AbortController();
+  const found = awaitMarkerLine({ path, match: "Clear complete!", offset: 4 }, controller.signal);
+  // Let the first probe miss so only a later re-read can find the line.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await writer.write("[RootBuilder] Clear complete!\n");
+  assert.equal(await found, "[RootBuilder] Clear complete!");
 });
