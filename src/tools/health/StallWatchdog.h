@@ -43,7 +43,8 @@ namespace dvb::tools::health
 			EventBus&                                 a_events,
 			std::chrono::milliseconds                 a_threshold,
 			std::function<int()>                      a_frame,
-			std::function<std::vector<std::string>()> a_menus);
+			std::function<std::vector<std::string>()> a_menus,
+			std::function<bool()>                     a_foreground = {});
 		~StallWatchdog();
 
 		StallWatchdog(const StallWatchdog&) = delete;

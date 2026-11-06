@@ -8,6 +8,7 @@
 #include "WindowFocus.h"
 #include "inspection/Form.h"
 #include "inspection/Readers.h"
+#include "platform/ProcessWindow.h"
 
 #include <cmath>
 
@@ -297,6 +298,7 @@ namespace dvb::fallout4
 						  { "frame", game::CurrentFrame() },
 						  { "lastTaskFrame", MainThread::LastCompletedFrame() },
 						  { "pendingTasks", MainThread::PendingTasks() },
+						  { "foreground", platform::IsForegroundOwnedByCurrentProcess() },
 						  { "lastLifecycle", lifecycle.lastEvent.empty() ? json(nullptr) : json(lifecycle.lastEvent) },
 				};
 				out.update(Identity());

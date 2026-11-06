@@ -7,6 +7,7 @@
 #include "Version.h"
 #include "inspection/Form.h"
 #include "inspection/Readers.h"
+#include "platform/ProcessWindow.h"
 
 #include <cmath>
 
@@ -312,6 +313,7 @@ namespace dvb::skyrimse
 					{ "frame", game::CurrentFrame() },
 					{ "lastTaskFrame", MainThread::LastCompletedFrame() },
 					{ "pendingTasks", MainThread::PendingTasks() },
+					{ "foreground", platform::IsForegroundOwnedByCurrentProcess() },
 					{ "lastLifecycle",
 						lifecycle.lastEvent.empty() ?
 							json(nullptr) :

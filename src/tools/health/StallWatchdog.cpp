@@ -55,7 +55,8 @@ namespace dvb::tools::health
 		EventBus&                                 a_events,
 		std::chrono::milliseconds                 a_threshold,
 		std::function<int()>                      a_frame,
-		std::function<std::vector<std::string>()> a_menus)
+		std::function<std::vector<std::string>()> a_menus,
+		std::function<bool()>                     a_foreground)
 	{
 		if (!a_frame || !a_menus)
 			throw std::invalid_argument("liveness callbacks are required");
@@ -63,7 +64,8 @@ namespace dvb::tools::health
 		const auto    interval = std::clamp(a_threshold / 3,
 			std::chrono::milliseconds(100), std::chrono::milliseconds(1000));
 		worker_ = std::jthread(
-			[this, &a_events, detector, interval, frame = std::move(a_frame), menus = std::move(a_menus)](
+			[this, &a_events, detector, interval, frame = std::move(a_frame), menus = std::move(a_menus),
+			 foreground = std::move(a_foreground)](
 				std::stop_token a_stop) mutable {
 				while (!a_stop.stop_requested())
 				{
@@ -77,6 +79,8 @@ namespace dvb::tools::health
 							};
 							if (!change->resumed)
 							{
+								// Null when unknown; a stall with the window in the background is expected.
+								payload["foreground"] = foreground ? json(foreground()) : json(nullptr);
 								const auto open = menus();
 								if (!open.empty())
 									payload["lastKnownOpenMenus"] = open;

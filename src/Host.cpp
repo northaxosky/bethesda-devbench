@@ -6,6 +6,7 @@
 #include "RuntimePaths.h"
 #include "Server.h"
 #include "ToolExtensions.h"
+#include "platform/ProcessWindow.h"
 #include "tools/BridgeSetupTool.h"
 #include "tools/ExtensionDescriptorRefresh.h"
 #include "tools/health/StallWatchdog.h"
@@ -189,7 +190,8 @@ namespace dvb
 					server.Events(),
 					std::chrono::milliseconds(
 						runtime->config.stallWatchdogMs),
-					&game::CurrentFrame, runtime->adapter.openMenus);
+					&game::CurrentFrame, runtime->adapter.openMenus,
+					&platform::IsForegroundOwnedByCurrentProcess);
 		}
 		runtime->scenarios.Register();
 		auto recordingConfig =
