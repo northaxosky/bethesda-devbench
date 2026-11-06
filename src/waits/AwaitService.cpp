@@ -55,8 +55,8 @@ namespace dvb::waits
 		}
 	}
 
-	AwaitService::AwaitService(EventBus& a_events, FrameAwaiter::FrameSource a_frame, FrameAwaiter::Submitter a_submit) :
-		events_(a_events), frames_(std::move(a_frame), std::move(a_submit))
+	AwaitService::AwaitService(EventBus& a_events, FrameAwaiter::FrameSource a_frame) :
+		events_(a_events), frames_(std::move(a_frame))
 	{}
 
 	void AwaitService::Shutdown()
@@ -88,17 +88,10 @@ namespace dvb::waits
 			const auto wait = ParseWait(a_req);
 			if (!wait)
 				return Reject(a_res, 400, "'waitMs' must be an integer");
-			try
-			{
-				const auto result = frames_.Wait(*after, *wait);
-				if (!result)
-					return Reject(a_res, 503, "game frame counter is unavailable");
-				Write(a_res, 200, json{ { "frame", result->frame }, { "advanced", result->advanced } });
-			}
-			catch (const std::exception& a_error)
-			{
-				Reject(a_res, 503, a_error.what());
-			}
+			const auto result = frames_.Wait(*after, *wait);
+			if (!result)
+				return Reject(a_res, 503, "game frame counter is unavailable");
+			Write(a_res, 200, json{ { "frame", result->frame }, { "advanced", result->advanced } });
 		});
 	}
 }

@@ -93,12 +93,6 @@ namespace dvb::MainThread
 		return future.get();
 	}
 
-	bool Post(std::function<void()> a_task)
-	{
-		const auto& runtime = GetRuntimeContext();
-		return runtime.enqueueTask && runtime.enqueueTask(std::move(a_task));
-	}
-
 	int LastCompletedFrame()
 	{
 		return g_lastTaskFrame.load(std::memory_order_relaxed);

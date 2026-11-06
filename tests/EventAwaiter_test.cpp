@@ -1,7 +1,9 @@
 #include "test_framework.h"
 
 #include "waits/EventAwaiter.h"
+#include "waits/PublishSignal.h"
 
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <thread>
@@ -61,4 +63,21 @@ TEST_CASE("await events waiters are released promptly by shutdown")
 
 	CHECK(Clock::now() - started < 5s);
 	CHECK(result.events.empty());
+}
+
+TEST_CASE("a topic-filtered publish signal ignores other topics and honors the extra predicate")
+{
+	EventBus                  events;
+	dvb::waits::PublishSignal signal(events, { "lifecycle" });
+
+	const auto seen = signal.Seen();
+	events.Publish("noise", json::object());
+	CHECK(!signal.Wait(seen, Clock::now() + 150ms));
+
+	std::atomic<bool> stop{ false };
+	auto              waiter = std::async(std::launch::async, [&] { return signal.Wait(seen, Clock::now() + 20s, [&] { return stop.load(); }); });
+	std::this_thread::sleep_for(50ms);
+	stop = true;
+	signal.Notify();
+	CHECK(waiter.get());
 }

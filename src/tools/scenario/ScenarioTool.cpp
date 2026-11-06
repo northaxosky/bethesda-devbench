@@ -2,6 +2,7 @@
 
 #include "ScenarioPolicy.h"
 #include "tools/scenario/ValuePredicate.h"
+#include "waits/PublishSignal.h"
 
 #include <algorithm>
 #include <array>
@@ -765,7 +766,7 @@ namespace dvb::tools::scenario
 	{
 		kNone,
 		kAnyEvent,
-		kStateEvent,  ///< lifecycle or menu topics
+		kStateEvent,
 	};
 
 	struct ScenarioService::Impl
@@ -776,7 +777,7 @@ namespace dvb::tools::scenario
 
 		std::mutex                                          mutex;
 		std::condition_variable                             workerCv;
-		bool                                                stopping = false;
+		std::atomic<bool>                                   stopping{ false };
 		bool                                                registered = false;
 		std::uint64_t                                       nextId = 0;
 		std::shared_ptr<RunRecord>                          active;
@@ -784,10 +785,8 @@ namespace dvb::tools::scenario
 		std::map<std::uint64_t, std::shared_ptr<RunRecord>> runs;
 		std::deque<std::uint64_t>                           completed;
 		std::thread                                         worker;
-		// Bumped (under mutex) by bus publishes so waits re-evaluate at once.
-		std::uint64_t   publishGeneration = 0;
-		std::uint64_t   stateGeneration = 0;  ///< lifecycle/menu publishes only
-		EventBus::SubId publishSubscription = 0;
+		waits::PublishSignal                                anyEvent;
+		waits::PublishSignal                                stateEvent;
 
 		Impl(
 			ToolRegistry&  a_registry,
@@ -795,29 +794,21 @@ namespace dvb::tools::scenario
 			ScenarioConfig a_config) :
 			registry(a_registry),
 			events(a_events),
-			config(std::move(a_config))
+			config(std::move(a_config)),
+			anyEvent(a_events),
+			stateEvent(a_events, { "lifecycle", "menu" })
 		{
 			if (config.historyLimit == 0 || config.maxExpandedSteps == 0 ||
 				config.maxTranscriptBytes == 0 || config.maxRunTime.count() <= 0 ||
 				config.maxStepTimeout.count() <= 0 || config.maxWait.count() < 0 ||
 				config.maxPoll.count() <= 0)
 				throw std::invalid_argument("invalid ScenarioConfig limits");
-			publishSubscription = events.Subscribe([this](const EventBus::Event& a_event) {
-				{
-					std::lock_guard lock(mutex);
-					++publishGeneration;
-					if (a_event.topic == "lifecycle" || a_event.topic == "menu")
-						++stateGeneration;
-				}
-				workerCv.notify_all();
-			});
 			worker = std::thread([this] { WorkerLoop(); });
 		}
 
 		~Impl()
 		{
 			Shutdown();
-			events.Unsubscribe(publishSubscription);
 		}
 
 		bool Register()
@@ -850,6 +841,7 @@ namespace dvb::tools::scenario
 					pending->cancelRequested.store(true);
 			}
 			workerCv.notify_all();
+			WakeEventWaits();
 			if (worker.joinable())
 				worker.join();
 		}
@@ -989,6 +981,7 @@ namespace dvb::tools::scenario
 				record->cancelRequested.store(true);
 			}
 			workerCv.notify_all();
+			WakeEventWaits();
 			return json{
 				{ "runId", record->id },
 				{ "done", false },
@@ -1014,16 +1007,34 @@ namespace dvb::tools::scenario
 			return StopReason::kNone;
 		}
 
-		/// Publish generation to pass to WaitInterruptibly; sample it before observing
-		/// state so a publish landing after the observation still wakes the wait.
-		std::uint64_t Generation(WakeOn a_wake)
+		waits::PublishSignal* SignalFor(WakeOn a_wake)
 		{
-			std::lock_guard lock(mutex);
-			return a_wake == WakeOn::kAnyEvent ? publishGeneration : stateGeneration;
+			switch (a_wake)
+			{
+				case WakeOn::kAnyEvent:
+					return &anyEvent;
+				case WakeOn::kStateEvent:
+					return &stateEvent;
+				case WakeOn::kNone:
+					break;
+			}
+			return nullptr;
 		}
 
-		/// A wake on a bus publish returns kNone early; callers re-evaluate and
-		/// treat a_until as the fallback interval.
+		// Cancel/shutdown must also end event waits; call without holding mutex.
+		void WakeEventWaits()
+		{
+			anyEvent.Notify();
+			stateEvent.Notify();
+		}
+
+		/// Sample before observing state so a later publish still wakes the wait.
+		std::uint64_t Generation(WakeOn a_wake)
+		{
+			auto* signal = SignalFor(a_wake);
+			return signal ? signal->Seen() : 0;
+		}
+
 		StopReason WaitInterruptibly(
 			const std::shared_ptr<RunRecord>& a_record,
 			Clock::time_point                 a_until,
@@ -1031,22 +1042,15 @@ namespace dvb::tools::scenario
 			WakeOn                            a_wake = WakeOn::kNone,
 			std::uint64_t                     a_seen = 0)
 		{
-			const auto       wakeAt = std::min(a_until, a_runDeadline);
-			std::unique_lock lock(mutex);
-			workerCv.wait_until(lock, wakeAt, [&] {
-				if (stopping || a_record->cancelRequested.load())
-					return true;
-				switch (a_wake)
-				{
-					case WakeOn::kAnyEvent:
-						return publishGeneration != a_seen;
-					case WakeOn::kStateEvent:
-						return stateGeneration != a_seen;
-					case WakeOn::kNone:
-						break;
-				}
-				return false;
-			});
+			const auto wakeAt = std::min(a_until, a_runDeadline);
+			const auto stopRequested = [&] { return stopping || a_record->cancelRequested.load(); };
+			if (auto* signal = SignalFor(a_wake))
+				signal->Wait(a_seen, wakeAt, stopRequested);
+			else
+			{
+				std::unique_lock lock(mutex);
+				workerCv.wait_until(lock, wakeAt, stopRequested);
+			}
 			if (stopping || a_record->cancelRequested.load())
 				return StopReason::kCancelled;
 			if (Clock::now() >= a_runDeadline)

@@ -79,7 +79,7 @@ namespace dvb::tools::health
 							};
 							if (!change->resumed)
 							{
-								// Null when unknown; a stall with the window in the background is expected.
+								// Null when unknown; background stalls are expected.
 								payload["foreground"] = foreground ? json(foreground()) : json(nullptr);
 								const auto open = menus();
 								if (!open.empty())

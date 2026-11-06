@@ -2,7 +2,6 @@
 
 #include "Compatibility.h"
 #include "GameState.h"
-#include "MainThreadTask.h"
 #include "McpAdapter.h"
 #include "RestAdapter.h"
 #include "RuntimePaths.h"
@@ -27,10 +26,25 @@
 #include <fstream>
 #include <mutex>
 #include <system_error>
+#include <thread>
 
 namespace
 {
 	std::atomic<int> g_boundPort{ 0 };
+
+	// httplib sets running only after bind and listen.
+	bool WaitUntilListening(const httplib::Server& a_http)
+	{
+		constexpr auto kTimeout = std::chrono::seconds(2);
+		const auto     deadline = std::chrono::steady_clock::now() + kTimeout;
+		while (!a_http.is_running())
+		{
+			if (std::chrono::steady_clock::now() >= deadline)
+				return false;
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		return true;
+	}
 
 	std::string Utf8Path(const std::filesystem::path& a_path)
 	{
@@ -226,7 +240,7 @@ namespace dvb
 			// instead of stalling; GET /api/health is the real fix for liveness checks.
 			http->set_read_timeout(2, 0);
 			m_restAdapter->Mount(*http);
-			g_await = std::make_unique<waits::AwaitService>(m_events, &game::CurrentFrame, &MainThread::Post);
+			g_await = std::make_unique<waits::AwaitService>(m_events, &game::CurrentFrame);
 			g_await->Mount(*http);
 		}
 		else
@@ -236,7 +250,10 @@ namespace dvb
 		// hit racing startup reads the right port rather than 0.
 		g_boundPort.store(chosen);
 		g_registry.store(&m_registry);        // reachable by dvb::RunTool (the in-game menu) while up
-		const bool ok = m_mcp->start(false);  // non-blocking; spawns the listener thread
+		bool ok = m_mcp->start(false);  // non-blocking; spawns the listener thread
+		// runtime.json promises a reachable port, so wait for the bind to land.
+		if (ok && m_mcp->http())
+			ok = WaitUntilListening(*m_mcp->http());
 		if (ok)
 		{
 			WriteRuntimeInfo(chosen);
@@ -263,7 +280,7 @@ namespace dvb
 
 	void Server::Stop()
 	{
-		// Blocked long-polls must wake first: stopping httplib joins its handler threads.
+		// Long-polls must wake first: stopping httplib joins handler threads.
 		if (g_await)
 			g_await->Shutdown();
 		if (m_mcp)

@@ -3,30 +3,12 @@
 namespace dvb::waits
 {
 	EventAwaiter::EventAwaiter(EventBus& a_events) :
-		events_(a_events)
-	{
-		subscription_ = events_.Subscribe([this](const EventBus::Event&) {
-			{
-				std::lock_guard lock(mutex_);
-				++published_;
-			}
-			wake_.notify_all();
-		});
-	}
-
-	EventAwaiter::~EventAwaiter()
-	{
-		Shutdown();
-		events_.Unsubscribe(subscription_);
-	}
+		events_(a_events), published_(a_events)
+	{}
 
 	void EventAwaiter::Shutdown()
 	{
-		{
-			std::lock_guard lock(mutex_);
-			stopping_ = true;
-		}
-		wake_.notify_all();
+		published_.Shutdown();
 	}
 
 	EventAwaiter::Result EventAwaiter::Wait(std::uint64_t a_since, std::chrono::milliseconds a_wait)
@@ -34,18 +16,10 @@ namespace dvb::waits
 		const auto deadline = std::chrono::steady_clock::now() + a_wait;
 		for (;;)
 		{
-			// Sampled before the head check: a publish landing after it bumps the counter.
-			std::uint64_t seen;
-			{
-				std::lock_guard lock(mutex_);
-				seen = published_;
-			}
+			const auto seen = published_.Seen();
 			if (events_.HeadSeq() > a_since)
 				break;
-			std::unique_lock lock(mutex_);
-			if (!wake_.wait_until(lock, deadline, [&] { return stopping_ || published_ != seen; }))
-				break;
-			if (stopping_)
+			if (!published_.Wait(seen, deadline) || published_.Stopped())
 				break;
 		}
 
