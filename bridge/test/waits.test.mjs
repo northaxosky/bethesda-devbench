@@ -16,6 +16,7 @@ import {
 } from "../dist/waits/conditions.js";
 import { ExitTracker } from "../dist/waits/exits.js";
 import { awaitMarkerLine } from "../dist/waits/files.js";
+import { CrashLogWatch } from "../dist/waits/signals.js";
 import { awaitCondition } from "../dist/waits/waiter.js";
 import {
   FakePlatform,
@@ -171,11 +172,13 @@ test("a stall while the window is in the background is reported, not failed", as
   assert.ok(messages.some((message) => message.includes("(background)")), messages.join("|"));
 });
 
-function ownedSignals(fixture, platform) {
+async function ownedSignals(fixture, platform) {
   return {
     instanceId: "5501-01DC000000000008",
     exits: new ExitTracker(platform, { pid: GAME_PID }),
-    crashLogs: [{ path: fixture.crashDir, pattern: "crash-*.log", maxBytes: 1, crash: true }],
+    crash: await CrashLogWatch.snapshot([
+      { path: fixture.crashDir, pattern: "crash-*.log", maxBytes: 1, crash: true },
+    ]),
   };
 }
 
@@ -185,7 +188,7 @@ test("a crash log that appears or grows after the wait began fails it as crashed
   platform.running = true;
   const old = join(fixture.crashDir, "crash-old.log");
   await writeFile(old, "from an earlier run");
-  const owned = ownedSignals(fixture, platform);
+  const owned = await ownedSignals(fixture, platform);
   t.after(() => owned.exits.dispose());
 
   const grown = wait(remote, eventOccurred({ topic: "never" }), { owned });
@@ -195,18 +198,34 @@ test("a crash log that appears or grows after the wait began fails it as crashed
   assert.equal(grownResult.reason, "crashed");
   assert.equal(grownResult.detail.path, old);
 
-  const fresh = wait(remote, eventOccurred({ topic: "never" }), { owned });
+  const relaunched = await ownedSignals(fixture, platform);
+  t.after(() => relaunched.exits.dispose());
+  const fresh = wait(remote, eventOccurred({ topic: "never" }), { owned: relaunched });
   await server.nextHold();
   const created = join(fixture.crashDir, "crash-new.log");
   await writeFile(created, "boom");
   assert.equal((await fresh).detail.path, created);
 });
 
+test("a crash log written before the wait began still fails it as crashed", async (t) => {
+  const { fixture, remote } = await setup(t);
+  const platform = new FakePlatform(fixture);
+  platform.running = true;
+  const owned = await ownedSignals(fixture, platform);
+  t.after(() => owned.exits.dispose());
+  const crashLog = join(fixture.crashDir, "crash-between-calls.log");
+  await writeFile(crashLog, "boom");
+
+  const result = await wait(remote, eventOccurred({ topic: "never" }), { owned });
+  assert.equal(result.reason, "crashed");
+  assert.equal(result.detail.path, crashLog);
+});
+
 test("a game exit ends the wait as exited long before the ceiling", async (t) => {
   const { fixture, server, remote } = await setup(t);
   const platform = new FakePlatform(fixture);
   platform.running = true;
-  const owned = ownedSignals(fixture, platform);
+  const owned = await ownedSignals(fixture, platform);
   t.after(() => owned.exits.dispose());
   const pending = wait(remote, eventOccurred({ topic: "never" }), { owned });
   await server.nextHold();

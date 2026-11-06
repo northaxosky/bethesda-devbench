@@ -41,11 +41,9 @@ export const AWAIT_CALL_MARGIN_MS = 10_000;
 export const PLATFORM_START_CEILING_MS = 60_000;
 
 export interface SessionTimings {
-  // Main-thread stall before a foreground wait fails.
   stallMs: number;
   // Safety ceiling of every wait; never the expected way to finish.
   ceilingMs: number;
-  // Safety ceiling of each stop stage (game exit, shim exit, exit marker).
   stopCeilingMs: number;
 }
 

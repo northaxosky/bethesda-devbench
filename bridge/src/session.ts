@@ -56,7 +56,6 @@ import {
 } from "./waits/conditions.js";
 import { ExitTracker } from "./waits/exits.js";
 import {
-  abortableDelay,
   awaitFileProbe,
   awaitMarkerLine,
   fileSize,
@@ -67,7 +66,6 @@ import {
   WaitFailedError,
   WaitSignals,
   whenAborted,
-  withCeiling,
   type OwnedSignals,
 } from "./waits/signals.js";
 import type {
@@ -134,11 +132,6 @@ class WorkflowFailure extends Error {
     super(message);
   }
 }
-
-// The listener thread starts just before runtime.json is written, so the
-// first connection after the file appears can still be refused; retry briefly.
-const STARTUP_RACE_ATTEMPTS = 20;
-const STARTUP_RACE_DELAY_MS = 50;
 
 export const SESSION_TOOL: Tool = {
   name: "devbench.session",
@@ -218,6 +211,7 @@ export class SessionController {
   private ready: ReadySession | undefined;
   // Exit-marker log size when this launch began; unknown for a reclaimed game.
   private launchMarkerOffset: number | undefined;
+  private crashWatch: CrashLogWatch | undefined;
   private activeJob: JobRecord | undefined;
   private lastJob: JobRecord | undefined;
   private nextRunId = 1;
@@ -298,7 +292,6 @@ export class SessionController {
     };
   }
 
-  /** Timings and, for the owned game only, exit and crash-log signals. */
   async waitEnvironment(instanceId: string): Promise<WaitEnvironment> {
     try {
       this.applyConfigTimings(await this.options.config.load());
@@ -326,7 +319,7 @@ export class SessionController {
     }
   }
 
-  // Blocking calls forward MCP cancellation to the job; detached ones return at once.
+  // Blocking calls forward MCP cancellation; detached ones return at once.
   private async runJob(
     kind: JobRecord["kind"],
     args: JsonObject,
@@ -632,7 +625,6 @@ export class SessionController {
     return this.finishEvidence(job, config, snapshot, report);
   }
 
-  // One waiter run for a job stage; a failed wait becomes a workflow failure.
   private async awaitStage(
     ready: ReadySession,
     job: JobRecord,
@@ -691,6 +683,7 @@ export class SessionController {
       this.launchMarkerOffset = config.exitMarker
         ? await fileSize(config.exitMarker.path)
         : undefined;
+      const crash = await CrashLogWatch.snapshot(config.logs);
       const requestedAt = Date.now();
       process = await platform.start({
         mo2Exe: config.mo2Exe,
@@ -701,7 +694,7 @@ export class SessionController {
         loaderExe: config.loaderExe,
         timeoutMs: PLATFORM_START_CEILING_MS,
       });
-      this.adopt(platform, process);
+      this.adopt(platform, process, crash);
       // FILETIME and Date.now() share the system clock; allow rounding only.
       if (Date.parse(process.creationTime) < requestedAt - 1_000) {
         throw new WorkflowFailure(
@@ -721,7 +714,6 @@ export class SessionController {
     return ready;
   }
 
-  // Waits on runtime.json changes, game exit, crash logs, and the ceiling.
   private async awaitRuntime(
     config: SessionConfig,
     remote: RemoteClient,
@@ -735,9 +727,7 @@ export class SessionController {
       ceilingMs: this.timings.ceilingMs,
       stallMs: this.timings.stallMs,
       signal: job.abort.signal,
-      owned: this.exits
-        ? { instanceId, exits: this.exits, crashLogs: config.logs }
-        : undefined,
+      owned: this.ownedSignalState(instanceId),
       progress: job.progress,
     });
     try {
@@ -746,7 +736,7 @@ export class SessionController {
           targets: remote.target.runtimeFiles.map(fileTarget),
           signal: signals.signal,
           probe: () =>
-            this.probeRuntime(config, remote, process, instanceId, dllSha256, observation, signals.signal),
+            this.probeRuntime(config, remote, process, instanceId, dllSha256, observation),
         }),
       );
     } catch (error) {
@@ -766,7 +756,6 @@ export class SessionController {
     instanceId: string,
     dllSha256: string,
     observation: { note: string },
-    signal: AbortSignal,
   ): Promise<ReadySession | undefined> {
     const platform = this.getPlatform();
     for (const runtimeFile of remote.target.runtimeFiles) {
@@ -781,8 +770,14 @@ export class SessionController {
         observation.note = `runtime.json at ${runtimeFile} identifies ${identity.instanceId}, not the owned process ${instanceId}`;
         continue;
       }
-      const resolved = await resolveAfterStartup(remote, signal, observation);
-      if (!resolved) return undefined;
+      let resolved: ResolvedRemote;
+      try {
+        resolved = await remote.resolve();
+      } catch (error) {
+        if (!(error instanceof GameUnavailableError)) throw error;
+        observation.note = error.message;
+        return undefined;
+      }
       if (resolved.identity.instanceId !== instanceId) {
         throw new WorkflowFailure(
           "identitymismatch",
@@ -827,16 +822,22 @@ export class SessionController {
     );
   }
 
-  private adopt(platform: NativePlatform, process: StartedProcess): void {
+  private adopt(
+    platform: NativePlatform,
+    process: StartedProcess,
+    crash: CrashLogWatch,
+  ): void {
     this.dropTracking();
     this.ownedProcess = process;
     this.ownershipReleased = false;
     this.exits = new ExitTracker(platform, process);
+    this.crashWatch = crash;
   }
 
   private dropTracking(): void {
     this.exits?.dispose();
     this.exits = undefined;
+    this.crashWatch = undefined;
     this.ready = undefined;
   }
 
@@ -845,12 +846,12 @@ export class SessionController {
   }
 
   private ownedSignals(ready: ReadySession): OwnedSignals | undefined {
-    if (!this.exits || this.ownershipReleased) return undefined;
-    return {
-      instanceId: ready.identity.instanceId,
-      exits: this.exits,
-      crashLogs: ready.config.logs,
-    };
+    return this.ownedSignalState(ready.identity.instanceId);
+  }
+
+  private ownedSignalState(instanceId: string): OwnedSignals | undefined {
+    if (!this.exits || !this.crashWatch || this.ownershipReleased) return undefined;
+    return { instanceId, exits: this.exits, crash: this.crashWatch };
   }
 
   private async stop(force: boolean, context: CallContext): Promise<JsonObject> {
@@ -887,7 +888,7 @@ export class SessionController {
         { cause: error },
       );
     }
-    this.adopt(platform, process);
+    this.adopt(platform, process, await CrashLogWatch.snapshot(config.logs));
     this.launchMarkerOffset = undefined;
   }
 
@@ -910,12 +911,12 @@ export class SessionController {
     };
   }
 
-  // Close, then wait for game exit, shim exit, and the exit marker, each
-  // against the stop ceiling; force terminates only after the ceiling passes.
+  // Force terminates only after the stop ceiling passes.
   private async cleanup(force: boolean, context: CallContext): Promise<JsonObject> {
     const platform = this.platform;
     const exits = this.exits;
-    if (!platform || !this.ownedProcess || !exits || this.ownershipReleased) {
+    const crashWatch = this.crashWatch;
+    if (!platform || !this.ownedProcess || !exits || !crashWatch || this.ownershipReleased) {
       return { ok: false, reason: "no retained owned process" };
     }
     const status = await platform.status();
@@ -928,8 +929,6 @@ export class SessionController {
       };
     }
     const config = await this.options.config.load();
-    const ceilingMs = this.timings.stopCeilingMs;
-    const crash = await CrashLogWatch.snapshot(config.logs);
     const reclaimedMarker = config.exitMarker !== undefined && this.launchMarkerOffset === undefined;
     const markerOffset = config.exitMarker
       ? (this.launchMarkerOffset ?? (await fileSize(config.exitMarker.path)))
@@ -949,10 +948,10 @@ export class SessionController {
       if (!close.running) {
         exited = true;
       } else {
-        const gone = await withCeiling(() => exits.gameExited, ceilingMs, context.signal);
-        if (!gone.done && gone.reason === "cancelled") return cancelled(false);
-        exited = gone.done;
-        reason = gone.done ? undefined : "graceful close did not finish within stopCeilingMs";
+        const gone = await this.stopStage(context, () => exits.gameExited);
+        if (gone.reason === "cancelled") return cancelled(false);
+        exited = gone.reason === undefined;
+        reason = exited ? undefined : "graceful close did not finish within stopCeilingMs";
       }
       if (!exited && force) {
         forced = true;
@@ -971,12 +970,12 @@ export class SessionController {
         ...(reason ? { reason } : {}),
       };
     }
-    const crashPath = await crash.scan().catch(() => undefined);
+    const crashPath = await crashWatch.scan().catch(() => undefined);
 
     await exits.confirmShim();
-    const shim = await withCeiling(() => exits.shimExited, ceilingMs, context.signal);
-    if (!shim.done && shim.reason === "cancelled") return cancelled(forced);
-    if (!shim.done) {
+    const shim = await this.stopStage(context, () => exits.shimExited);
+    if (shim.reason === "cancelled") return cancelled(forced);
+    if (shim.reason) {
       return {
         ok: false,
         exited: true,
@@ -993,14 +992,12 @@ export class SessionController {
     let exitMarker: JsonObject | null = null;
     if (config.exitMarker && markerOffset !== undefined) {
       const { path, match } = config.exitMarker;
-      const found = await withCeiling(
-        (signal) => awaitMarkerLine({ path, match, offset: markerOffset }, signal),
-        ceilingMs,
-        context.signal,
+      const found = await this.stopStage(context, (signal) =>
+        awaitMarkerLine({ path, match, offset: markerOffset }, signal),
       );
       exitMarker = {
-        matched: found.done,
-        ...(found.done ? { line: found.value } : { reason: found.reason }),
+        matched: found.reason === undefined,
+        ...(found.reason === undefined ? { line: found.value } : { reason: found.reason }),
         ...(reclaimedMarker
           ? { note: "reclaimed game: the marker offset was recorded at stop time" }
           : {}),
@@ -1015,6 +1012,25 @@ export class SessionController {
       ...(status.running ? {} : { alreadyExited: true }),
       ...(crashPath ? { crash: { path: crashPath } } : {}),
     };
+  }
+
+  private async stopStage<T>(
+    context: CallContext,
+    work: (signal: AbortSignal) => Promise<T>,
+  ): Promise<{ value: T; reason?: undefined } | { reason: "ceiling" | "cancelled" }> {
+    const signals = await WaitSignals.start({
+      ceilingMs: this.timings.stopCeilingMs,
+      stallMs: this.timings.stallMs,
+      signal: context.signal,
+    });
+    try {
+      return { value: await signals.guard(work(signals.signal)) };
+    } catch (error) {
+      if (!(error instanceof WaitFailedError)) throw error;
+      return { reason: error.failure.reason === "cancelled" ? "cancelled" : "ceiling" };
+    } finally {
+      signals.dispose();
+    }
   }
 
   private async releaseOwnership(): Promise<JsonObject> {
@@ -1111,24 +1127,6 @@ export class SessionController {
     this.platform ??= this.options.platformFactory();
     return this.platform;
   }
-}
-
-// Retries only a refused connection, once per runtime.json change.
-async function resolveAfterStartup(
-  remote: RemoteClient,
-  signal: AbortSignal,
-  observation: { note: string },
-): Promise<ResolvedRemote | undefined> {
-  for (let attempt = 0; attempt < STARTUP_RACE_ATTEMPTS; attempt++) {
-    try {
-      return await remote.resolve();
-    } catch (error) {
-      if (!(error instanceof GameUnavailableError)) throw error;
-      observation.note = error.message;
-    }
-    await abortableDelay(STARTUP_RACE_DELAY_MS, signal);
-  }
-  return undefined;
 }
 
 function launchFailure(

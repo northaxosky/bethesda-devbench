@@ -9,7 +9,6 @@ import {
 } from "./conditions.js";
 import type { WaitFailure } from "./types.js";
 
-/** The `await` argument of a proxied mutation. */
 export type AwaitArgument =
   | boolean
   | { event: string; correlate: string };
@@ -27,7 +26,6 @@ interface OutcomeRule {
 const isOperation = (receipt: JsonObject): receipt is JsonObject & { operationId: number } =>
   receipt.queued === true && Number.isSafeInteger(receipt.operationId);
 
-/** Which proxied mutations await what by default, keyed by tool name. */
 const OUTCOMES: Readonly<Record<string, readonly OutcomeRule[]>> = {
   game: [
     {
@@ -87,7 +85,6 @@ export const AWAIT_SCHEMA = {
   ],
 } as const satisfies JsonValue;
 
-/** Splits `await` off the arguments forwarded to the game. */
 export function splitAwait(args: JsonObject): {
   forwarded: JsonObject;
   awaitArg: AwaitArgument | undefined;
@@ -107,7 +104,6 @@ export function splitAwait(args: JsonObject): {
   throw new Error("await must be a boolean or {event, correlate} strings");
 }
 
-/** Whether the call awaits anything; decided before dispatch to take the cursor. */
 export function awaitsOutcome(
   tool: string,
   args: JsonObject,
@@ -118,7 +114,6 @@ export function awaitsOutcome(
   return OUTCOMES[tool]?.some((rule) => rule.when(args)) === true;
 }
 
-/** The condition (or uncorrelated failure) for a dispatched call's receipt. */
 export function outcomeFor(
   tool: string,
   args: JsonObject,

@@ -5,10 +5,7 @@ export interface GameExit {
   exitCode: number | null;
 }
 
-/**
- * Sticky record of one owned process's exit events. It subscribes at
- * construction, so an exit that precedes any wait is still observed.
- */
+// Subscribes at construction so an exit before any wait is still seen.
 export class ExitTracker {
   readonly gameExited: Promise<GameExit>;
   readonly shimExited: Promise<void>;
@@ -37,7 +34,6 @@ export class ExitTracker {
     });
   }
 
-  /** Calls `listener` once the game has exited; returns the unsubscribe. */
   onGameExit(listener: (exit: GameExit) => void): () => void {
     const known = this.exit;
     if (known) {
@@ -50,13 +46,12 @@ export class ExitTracker {
     return () => this.listeners.delete(listener);
   }
 
-  /** Status check after subscribing, for an exit that beat the subscription. */
+  // Catches an exit that beat the subscription.
   async confirm(): Promise<void> {
     const status = await this.platform.status();
     if (!status.running) this.markGameExited({ pid: this.process.pid, exitCode: null });
   }
 
-  /** Settles shimExited when the helper no longer tracks a live shim. */
   async confirmShim(): Promise<void> {
     const status = await this.platform.status();
     if (!status.owned || status.shimRunning === false) this.markShimExited();

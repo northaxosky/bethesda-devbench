@@ -23,23 +23,16 @@ import type {
 export interface WaitRequest {
   remote: RemoteClient;
   condition: WaitCondition;
-  // Events at or before this seq predate the wait; defaults to the current head.
+  // Events at or before this seq predate the wait; default is head.
   since?: number;
   timings: WaitTimings;
-  // Request or job cancellation.
   signal?: AbortSignal | undefined;
   progress?: ProgressSink | undefined;
-  // Exit and crash-log signals; only the controller has them.
   owned?: OwnedSignals | undefined;
 }
 
 const MAX_EVENT_PROGRESS_PER_POLL = 5;
 
-/**
- * Waits for one condition. Takes a cursor, evaluates once, then long-polls
- * the event feed, re-evaluating when the condition says so, while the
- * failure signals race the whole wait.
- */
 export async function awaitCondition(request: WaitRequest): Promise<WaitResult> {
   const { remote, condition, progress } = request;
   const started = performance.now();
@@ -134,7 +127,6 @@ function shouldEvaluate(
   retry: boolean,
 ): boolean {
   if (input.first || input.gap || retry) return true;
-  if (input.events.length === 0) return condition.heartbeat === true;
   return (
     condition.topics.includes("*") ||
     input.events.some((event) => condition.topics.includes(event.topic))

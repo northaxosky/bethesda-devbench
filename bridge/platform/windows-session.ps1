@@ -234,7 +234,7 @@ namespace BethesdaDevBench.WindowsSession
             }
         }
 
-        // Reports exits already signaled; called when the owner sees them first.
+        // Reports exits signaled before the owner looked.
         internal void EmitSignaled()
         {
             lock (gate_)
@@ -1852,7 +1852,7 @@ namespace BethesdaDevBench.WindowsSession
             if (includeRunning)
             {
                 result["running"] = session.Running;
-                // A reclaimed game may have no live shim, so no shimExited will follow.
+                // A reclaimed game may have no live shim, so no shimExited follows.
                 result["shimRunning"] = session.ShimHandle != null &&
                     WindowsProcess.IsRunning(session.ShimHandle);
             }

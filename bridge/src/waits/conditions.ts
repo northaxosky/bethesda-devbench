@@ -22,7 +22,6 @@ export interface ConditionContext {
 }
 
 export interface ConditionInput {
-  // Events newer than the wait cursor since the last evaluation.
   events: readonly DevBenchEvent[];
   // Retained events at or before the cursor; first evaluation only.
   history: readonly DevBenchEvent[];
@@ -35,19 +34,12 @@ export interface ConditionInput {
 export type Verdict =
   | { state: "satisfied"; evidence: JsonObject }
   | ({ state: "failed" } & WaitFailure)
-  // retry: a state read was not conclusive; re-evaluate on the next poll return.
+  // retry: inconclusive state read; re-evaluate on the next poll.
   | { state: "pending"; retry: boolean };
 
-/**
- * One declarative wait: which topics re-evaluate it, an optional state
- * evaluator, and an optional independent driver (frame counting).
- */
 export interface WaitCondition {
   readonly until: string;
-  // Topics that trigger evaluate; "*" matches every event.
   readonly topics: readonly string[];
-  // Also re-evaluate when a long-poll returns empty.
-  readonly heartbeat?: boolean;
   evaluate?(ctx: ConditionContext, input: ConditionInput): Promise<Verdict>;
   drive?(ctx: ConditionContext): Promise<JsonObject>;
 }
@@ -85,7 +77,7 @@ function loadAvailable(status: JsonObject): boolean {
   );
 }
 
-// A message box blocks the game; the caller can accept it via menu and wait again.
+// A message box blocks the game; accept it via menu, then wait again.
 async function modalVerdict(
   ctx: ConditionContext,
   input: ConditionInput,
@@ -108,7 +100,6 @@ async function modalVerdict(
   });
 }
 
-/** Game is loaded, idle, and accepts a native fixture load. */
 export function canLoad(): WaitCondition {
   return {
     until: "canLoad",
@@ -129,7 +120,6 @@ export function canLoad(): WaitCondition {
   };
 }
 
-/** A load operation succeeded and the player exists in the world. */
 export function playerReady(target: {
   operationId?: number;
   actionCursor?: number;
@@ -187,7 +177,6 @@ function menuNames(list: JsonObject): string[] {
   );
 }
 
-/** A named menu is open (or closed): current state first, then events. */
 export function menuState(target: { name: string; open: boolean }): WaitCondition {
   let needState = true;
   return {
@@ -220,10 +209,7 @@ function shallowMatch(data: JsonObject, match: JsonObject | undefined): boolean 
   );
 }
 
-/**
- * A published event matches. Without `after`, a `match` also scans the whole
- * retained ring so correlation ids work for events fired before the wait.
- */
+// Without `after`, `match` also scans the ring for pre-wait events.
 export function eventOccurred(target: {
   topic: string;
   match?: JsonObject;
@@ -252,7 +238,6 @@ export function eventOccurred(target: {
   };
 }
 
-/** The game renders `count` more frames. */
 export function framesElapsed(count: number): WaitCondition {
   return {
     until: "frames",
@@ -270,7 +255,6 @@ export function framesElapsed(count: number): WaitCondition {
   };
 }
 
-/** A scenario run finished: its `scenario.finished` event, then one status read. */
 export function scenarioFinished(runId: number): WaitCondition {
   let retry = false;
   return {
@@ -289,13 +273,10 @@ export function scenarioFinished(runId: number): WaitCondition {
   };
 }
 
-/** A correlated game operation (such as a save) reached a terminal phase. */
 export function operationTerminal(operationId: number): WaitCondition {
   return {
     until: "operation",
-    topics: ["*"],
-    // The operation phase can change without a dedicated event.
-    heartbeat: true,
+    topics: ["lifecycle"],
     async evaluate(ctx) {
       const status = await ctx.read("game", { action: "status" });
       if (!status.ok) return pending(true);
@@ -323,7 +304,6 @@ function optionalInteger(args: JsonObject, key: string): number | undefined {
   return value as number;
 }
 
-/** Builds the condition named by a `devbench.session wait` call. */
 export function parseCondition(args: JsonObject): WaitCondition {
   switch (args.until) {
     case "canLoad":

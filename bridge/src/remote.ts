@@ -229,13 +229,11 @@ export class RemoteClient {
     };
   }
 
-  /** Cursor for events published after this call; reads no history. */
   async headSeq(): Promise<number> {
     const { value } = await this.events(SEQ_BEYOND_HEAD);
     return value.headSeq;
   }
 
-  /** Long-polls for events after `since`; returns at once when any exist. */
   async awaitEvents(
     since: number,
     options: AwaitOptions,
@@ -269,7 +267,6 @@ export class RemoteClient {
     };
   }
 
-  /** Long-polls until the game frame counter passes `after`. */
   async awaitFrame(
     after: number,
     options: AwaitOptions,

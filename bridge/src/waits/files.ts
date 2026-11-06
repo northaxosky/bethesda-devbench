@@ -9,12 +9,7 @@ export interface WatchTarget {
 
 const MAX_ANCESTOR_CLIMB = 4;
 
-/**
- * Resolves with the first defined `probe()` result. The probe runs once after
- * the directory watchers are armed and again after every matching change, so
- * no change can fall between the check and the watch. A rejected probe or a
- * watcher error rejects the wait.
- */
+// Probes after arming watchers and after each change, so none is missed.
 export function awaitFileProbe<T>(options: {
   targets: readonly WatchTarget[];
   probe: () => Promise<T | undefined>;
@@ -106,7 +101,6 @@ function watchTarget(
   return watcher;
 }
 
-/** Watch target for one file, accepted by case-insensitive base name. */
 export function fileTarget(path: string): WatchTarget {
   const name = basename(path).toLowerCase();
   return { dir: dirname(path), accept: (changed) => changed.toLowerCase() === name };
@@ -123,15 +117,12 @@ export async function fileSize(path: string): Promise<number> {
 export interface MarkerSearch {
   path: string;
   match: string;
-  // Only bytes appended past this offset count.
   offset: number;
 }
 
-// Windows defers change notifications for a file another process keeps open
-// (MO2 holds its log), so appended lines are also re-read on this interval.
+// Windows skips change events for files held open; re-read on a timer.
 const HELD_OPEN_RECHECK_MS = 250;
 
-/** Resolves with the first line containing `match` appended after `offset`. */
 export function awaitMarkerLine(
   search: MarkerSearch,
   signal: AbortSignal,
@@ -167,25 +158,6 @@ export function awaitMarkerLine(
         await handle.close();
       }
     },
-  });
-}
-
-/** Abortable delay for the bounded startup-race retry only. */
-export function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(abortReason(signal));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      reject(abortReason(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 

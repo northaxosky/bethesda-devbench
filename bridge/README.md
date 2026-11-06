@@ -77,7 +77,7 @@ The config names the portable MO2 executable, actual profiles directory and prof
 MO2 shim executable label, game and script extender executables, physical deployed DLL, evidence
 directory, and only the log paths that may be collected. A log entry with
 `"crash": true` (a file, or a directory with `pattern`) is also a crash signal: a
-matching file that appears or grows during a wait fails it as `crashed`. The
+matching file that appears or grows after the launch (or reclaim) fails a wait as `crashed`. The
 optional `exitMarker` (`{"path", "match"}`, absolute path) names the log whose
 newly appended line containing `match` (for example `[RootBuilder] Clear complete!`
 in `mo_interface.log`) proves MO2 cleanup finished after a stop. It may pin the runtime
@@ -196,7 +196,7 @@ Failures come from real signals; the ceiling is only a safety net.
 | `reason` | Signal |
 |---|---|
 | `exited` | the owned game process exited (helper `gameExited`) |
-| `crashed` | a `"crash": true` log file was created or grew since the wait began, or exists when the game exits |
+| `crashed` | a `"crash": true` log file was created or grew since the game was launched or reclaimed, including between calls |
 | `stalled` | `health.stalled` not resolved by `health.resumed` within `stallMs` while the game window is foreground; `detail` carries frame and pending tasks. A stall in the background is reported in progress, not failed |
 | `modal` | a `MessageBoxMenu` opened during `canLoad`/`playerReady`; `detail.snapshot` holds its text and buttons (accept it with the `menu` tool, then wait again) |
 | `loadFailed` | the correlated load operation failed or was cancelled, or `postLoadGame {success:false}` followed the action cursor |

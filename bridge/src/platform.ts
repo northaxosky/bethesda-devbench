@@ -81,7 +81,6 @@ export interface NativePlatform {
   // Posts a graceful close and returns at once; exit arrives as gameExited.
   requestClose(): Promise<CloseRequest>;
   terminate(): Promise<CloseResult>;
-  // Unsolicited helper events; returns the unsubscribe function.
   onEvent(listener: (event: PlatformEvent) => void): () => void;
   release(): Promise<void>;
   // Retakes a game an earlier helper launched and exited without releasing.

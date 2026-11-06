@@ -201,10 +201,7 @@ export class FakePlatform {
   }
 }
 
-/**
- * Fake DevBench listener with a real event bus: /api/await/events answers at
- * once when events exist, else holds until publish() or waitMs.
- */
+// Fake listener: holds /api/await/events until publish() or waitMs.
 export async function startGameServer(fixture, options = {}) {
   const identity = {
     port: 0,
@@ -253,9 +250,7 @@ export async function startGameServer(fixture, options = {}) {
     for (const waiter of [...state.eventWaiters]) waiter.check();
     return event;
   };
-  // Resolves when the next long-poll request is being held.
   state.nextHold = () => new Promise((resolve) => state.holdListeners.push(resolve));
-  // Resolves when a held long-poll is dropped by its client.
   state.nextClosedAwait = () => new Promise((resolve) => state.closeListeners.push(resolve));
   state.advanceFrame = (count = 1) => {
     game.frame += count;

@@ -36,10 +36,8 @@ export interface WaitFailed extends WaitFailure {
 
 export type WaitResult = WaitSatisfied | WaitFailed;
 
-/** Short human progress line; the MCP layer turns it into a notification. */
 export type ProgressSink = (message: string) => void;
 
-/** Per-request plumbing the MCP server hands to session and proxy handlers. */
 export interface CallContext {
   signal?: AbortSignal | undefined;
   progress?: ProgressSink | undefined;

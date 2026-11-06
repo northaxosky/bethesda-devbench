@@ -34,7 +34,6 @@ export interface ProxyStatus {
   unavailableReason?: string;
 }
 
-/** What a proxy wait may use beyond the remote: timings and owned-game signals. */
 export interface WaitEnvironment {
   timings: WaitTimings;
   owned?: OwnedSignals | undefined;
@@ -44,7 +43,6 @@ const DEFAULT_ENVIRONMENT: WaitEnvironment = { timings: DEFAULT_SESSION_TIMINGS 
 
 export interface RemoteProxyOptions {
   pollIntervalMs?: number;
-  // Resolves the wait environment for the game instance a call reached.
   environment?: (instanceId: string) => Promise<WaitEnvironment>;
   onListChanged?: () => Promise<void>;
   logger?: (message: string) => void;
@@ -248,7 +246,6 @@ export class RemoteProxy {
   }
 }
 
-// Mutating tools may block on their outcome; see waits/outcomes.ts.
 function withAwait(schema: JsonObject): JsonObject {
   const properties = isObject(schema.properties) ? schema.properties : {};
   return {

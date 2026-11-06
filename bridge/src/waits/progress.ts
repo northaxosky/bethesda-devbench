@@ -1,7 +1,6 @@
 import type { DevBenchEvent } from "../remote.js";
 import type { ProgressSink } from "./types.js";
 
-/** The slice of the MCP request handler context that progress needs. */
 export interface ProgressContext {
   _meta?: { progressToken?: string | number | undefined } | undefined;
   sendNotification(notification: {
@@ -10,7 +9,6 @@ export interface ProgressContext {
   }): Promise<void>;
 }
 
-/** Progress notifications for one request, or undefined without a token. */
 export function createProgressSink(context: ProgressContext): ProgressSink | undefined {
   const token = context._meta?.progressToken;
   if (token === undefined) return undefined;

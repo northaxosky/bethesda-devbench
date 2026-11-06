@@ -8,17 +8,16 @@ import type { ExitTracker } from "./exits.js";
 import { awaitFileProbe, fileTarget, type WatchTarget } from "./files.js";
 import type { ProgressSink, WaitFailure, WaitFailureReason } from "./types.js";
 
-/** What only the controller knows about a game it launched. */
 export interface OwnedSignals {
   instanceId: string;
   exits: ExitTracker;
-  crashLogs: readonly SessionLogSpec[];
+  // Baselined at launch or reclaim, so earlier crashes still classify.
+  crash: CrashLogWatch;
 }
 
 export interface SignalOptions {
   ceilingMs: number;
   stallMs: number;
-  // Request or job cancellation.
   signal?: AbortSignal | undefined;
   owned?: OwnedSignals | undefined;
   // Reads `inspect health`; stall detection is off without it.
@@ -32,7 +31,6 @@ export class WaitFailedError extends Error {
   }
 }
 
-/** Files under crash-flagged log specs that appeared or grew since snapshot. */
 export class CrashLogWatch {
   private constructor(
     private readonly specs: readonly SessionLogSpec[],
@@ -88,10 +86,7 @@ async function crashFileSizes(
   return sizes;
 }
 
-/**
- * The failure-signal set of one wait. The first signal to fire wins, aborts
- * `signal` so in-flight long-polls and watchers stop, and resolves `failed`.
- */
+// First signal wins and aborts `signal`, stopping in-flight watchers.
 export class WaitSignals {
   readonly failed: Promise<WaitFailure>;
   private readonly controller = new AbortController();
@@ -118,7 +113,6 @@ export class WaitSignals {
     return signals;
   }
 
-  /** Aborts when a failure fires or the signals are disposed. */
   get signal(): AbortSignal {
     return this.controller.signal;
   }
@@ -130,7 +124,6 @@ export class WaitSignals {
     this.controller.abort();
   }
 
-  /** Feeds health events to the stall detector, oldest first. */
   observe(events: readonly DevBenchEvent[]): void {
     for (const event of events) {
       if (event.topic === "health.stalled") this.armStall(event.data);
@@ -138,7 +131,6 @@ export class WaitSignals {
     }
   }
 
-  /** Resolves with the work's value, or throws the failure that fired first. */
   async guard<T>(work: Promise<T>): Promise<T> {
     const settled = await Promise.race([
       work.then(
@@ -184,7 +176,7 @@ export class WaitSignals {
   }
 
   private async armOwned(owned: OwnedSignals): Promise<void> {
-    const crash = await CrashLogWatch.snapshot(owned.crashLogs);
+    const { crash } = owned;
     this.cleanups.push(
       owned.exits.onGameExit((exit) => {
         // One scan so a crash is classified as crashed, not exited.
@@ -268,41 +260,6 @@ export class WaitSignals {
   }
 }
 
-export type CeilingResult<T> =
-  | { done: true; value: T }
-  | { done: false; reason: "ceiling" | "cancelled" };
-
-/** Races stage work against a safety ceiling and optional cancellation. */
-export async function withCeiling<T>(
-  work: (signal: AbortSignal) => Promise<T>,
-  ceilingMs: number,
-  cancel?: AbortSignal,
-): Promise<CeilingResult<T>> {
-  const controller = new AbortController();
-  let timer: NodeJS.Timeout | undefined;
-  let onCancel: (() => void) | undefined;
-  const stopped = new Promise<CeilingResult<T>>((resolve) => {
-    timer = setTimeout(() => {
-      resolve({ done: false, reason: "ceiling" });
-    }, ceilingMs);
-    onCancel = (): void => {
-      resolve({ done: false, reason: "cancelled" });
-    };
-    if (cancel?.aborted) onCancel();
-    else cancel?.addEventListener("abort", onCancel, { once: true });
-  });
-  try {
-    const pending = work(controller.signal).then((value) => ({ done: true as const, value }));
-    pending.catch(() => undefined);
-    return await Promise.race([pending, stopped]);
-  } finally {
-    clearTimeout(timer);
-    if (onCancel) cancel?.removeEventListener("abort", onCancel);
-    controller.abort();
-  }
-}
-
-/** Resolves when `signal` aborts; never if it is absent. */
 export function whenAborted(signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve) => {
     if (!signal) return;
