@@ -1852,6 +1852,9 @@ namespace BethesdaDevBench.WindowsSession
             if (includeRunning)
             {
                 result["running"] = session.Running;
+                // A reclaimed game may have no live shim, so no shimExited will follow.
+                result["shimRunning"] = session.ShimHandle != null &&
+                    WindowsProcess.IsRunning(session.ShimHandle);
             }
             return result;
         }

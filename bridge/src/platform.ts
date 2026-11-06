@@ -19,6 +19,7 @@ export interface OwnedProcessStatus {
   creationTime?: string;
   exe?: string;
   mo2Pid?: number;
+  shimRunning?: boolean;
 }
 
 export interface StartRequest {
@@ -370,6 +371,9 @@ function parseStatus(value: unknown): OwnedProcessStatus {
     ...(typeof object.exe === "string" ? { exe: object.exe } : {}),
     ...(Number.isSafeInteger(object.mo2Pid)
       ? { mo2Pid: object.mo2Pid as number }
+      : {}),
+    ...(typeof object.shimRunning === "boolean"
+      ? { shimRunning: object.shimRunning }
       : {}),
   };
 }
