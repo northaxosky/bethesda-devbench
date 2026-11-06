@@ -441,6 +441,36 @@ TEST_CASE("waitFor sees a rapid event published inside the preceding tool")
 	CHECK(result.value.at("results")[1].at("actual").at("payload").at("state") == "ready");
 }
 
+TEST_CASE("waitFor wakes on the publish instead of sleeping the poll interval")
+{
+	ToolRegistry registry;
+	EventBus     events;
+	ScenarioService service(registry, events);
+	service.Register();
+
+	std::thread publisher([&] {
+		std::this_thread::sleep_for(100ms);
+		events.Publish("fixture", json{ { "state", "ready" } });
+	});
+	const auto started = std::chrono::steady_clock::now();
+	const auto result = Scenario(
+		registry,
+		json{
+			{ "steps", json::array({
+						   json{
+							   { "waitFor", json{ { "topic", "fixture" } } },
+							   { "timeoutMs", 20000 },
+							   { "pollMs", 10000 },
+						   },
+					   }) },
+		});
+	const auto elapsed = std::chrono::steady_clock::now() - started;
+	publisher.join();
+	CHECK(result.ok);
+	CHECK(result.value.at("ok").get<bool>());
+	CHECK(elapsed < 5s);
+}
+
 TEST_CASE("a valid tool receipt eventCursor refines the pre-dispatch cursor")
 {
 	ToolRegistry registry;

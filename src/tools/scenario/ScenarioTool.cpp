@@ -761,6 +761,13 @@ namespace dvb::tools::scenario
 		}
 	}
 
+	enum class WakeOn
+	{
+		kNone,
+		kAnyEvent,
+		kStateEvent,  ///< lifecycle or menu topics
+	};
+
 	struct ScenarioService::Impl
 	{
 		ToolRegistry&  registry;
@@ -777,6 +784,10 @@ namespace dvb::tools::scenario
 		std::map<std::uint64_t, std::shared_ptr<RunRecord>> runs;
 		std::deque<std::uint64_t>                           completed;
 		std::thread                                         worker;
+		// Bumped (under mutex) by bus publishes so waits re-evaluate at once.
+		std::uint64_t   publishGeneration = 0;
+		std::uint64_t   stateGeneration = 0;  ///< lifecycle/menu publishes only
+		EventBus::SubId publishSubscription = 0;
 
 		Impl(
 			ToolRegistry&  a_registry,
@@ -791,12 +802,22 @@ namespace dvb::tools::scenario
 				config.maxStepTimeout.count() <= 0 || config.maxWait.count() < 0 ||
 				config.maxPoll.count() <= 0)
 				throw std::invalid_argument("invalid ScenarioConfig limits");
+			publishSubscription = events.Subscribe([this](const EventBus::Event& a_event) {
+				{
+					std::lock_guard lock(mutex);
+					++publishGeneration;
+					if (a_event.topic == "lifecycle" || a_event.topic == "menu")
+						++stateGeneration;
+				}
+				workerCv.notify_all();
+			});
 			worker = std::thread([this] { WorkerLoop(); });
 		}
 
 		~Impl()
 		{
 			Shutdown();
+			events.Unsubscribe(publishSubscription);
 		}
 
 		bool Register()
@@ -993,15 +1014,38 @@ namespace dvb::tools::scenario
 			return StopReason::kNone;
 		}
 
+		/// Publish generation to pass to WaitInterruptibly; sample it before observing
+		/// state so a publish landing after the observation still wakes the wait.
+		std::uint64_t Generation(WakeOn a_wake)
+		{
+			std::lock_guard lock(mutex);
+			return a_wake == WakeOn::kAnyEvent ? publishGeneration : stateGeneration;
+		}
+
+		/// A wake on a bus publish returns kNone early; callers re-evaluate and
+		/// treat a_until as the fallback interval.
 		StopReason WaitInterruptibly(
 			const std::shared_ptr<RunRecord>& a_record,
 			Clock::time_point                 a_until,
-			Clock::time_point                 a_runDeadline)
+			Clock::time_point                 a_runDeadline,
+			WakeOn                            a_wake = WakeOn::kNone,
+			std::uint64_t                     a_seen = 0)
 		{
 			const auto       wakeAt = std::min(a_until, a_runDeadline);
 			std::unique_lock lock(mutex);
 			workerCv.wait_until(lock, wakeAt, [&] {
-				return stopping || a_record->cancelRequested.load();
+				if (stopping || a_record->cancelRequested.load())
+					return true;
+				switch (a_wake)
+				{
+					case WakeOn::kAnyEvent:
+						return publishGeneration != a_seen;
+					case WakeOn::kStateEvent:
+						return stateGeneration != a_seen;
+					case WakeOn::kNone:
+						break;
+				}
+				return false;
 			});
 			if (stopping || a_record->cancelRequested.load())
 				return StopReason::kCancelled;
@@ -1900,6 +1944,7 @@ namespace dvb::tools::scenario
 				bool       available = false;
 				for (;;)
 				{
+					const auto seen = Generation(WakeOn::kStateEvent);
 					const auto observed = InvokeInternal(
 						"inspect", json{ { "kind", "scene" } }, a_record->context);
 					if (observed.ok && observed.value.value("playerLoaded", false))
@@ -1914,7 +1959,9 @@ namespace dvb::tools::scenario
 					const auto stop = WaitInterruptibly(
 						a_record,
 						std::min(deadline, now + a_step.poll),
-						a_runDeadline);
+						a_runDeadline,
+						WakeOn::kStateEvent,
+						seen);
 					if (stop != StopReason::kNone)
 					{
 						outcome.transcript["ok"] = false;
@@ -1991,6 +2038,7 @@ namespace dvb::tools::scenario
 				const auto deadline = Clock::now() + a_step.timeout;
 				for (;;)
 				{
+					const auto seen = Generation(WakeOn::kStateEvent);
 					try
 					{
 						if (CheckState(a_step.condition, a_record->context))
@@ -2037,7 +2085,9 @@ namespace dvb::tools::scenario
 					const auto stop = WaitInterruptibly(
 						a_record,
 						std::min(deadline, now + a_step.poll),
-						a_runDeadline);
+						a_runDeadline,
+						WakeOn::kStateEvent,
+						seen);
 					if (stop != StopReason::kNone)
 					{
 						outcome.transcript["ok"] = false;
@@ -2097,6 +2147,7 @@ namespace dvb::tools::scenario
 
 			for (;;)
 			{
+				const auto seen = Generation(WakeOn::kAnyEvent);
 				const auto found = events.Since(cursor);
 				if (!found.empty() && found.front().seq > cursor + 1)
 				{
@@ -2243,7 +2294,9 @@ namespace dvb::tools::scenario
 				const StopReason stop = WaitInterruptibly(
 					a_record,
 					std::min(stepDeadline, now + a_step.poll),
-					a_runDeadline);
+					a_runDeadline,
+					WakeOn::kAnyEvent,
+					seen);
 				if (stop == StopReason::kCancelled)
 				{
 					outcome.transcript["ok"] = false;
