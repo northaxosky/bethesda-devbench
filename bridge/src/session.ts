@@ -76,6 +76,7 @@ interface JobRecord {
   startedAt: string;
   updatedAt: string;
   abort: AbortController;
+  finished?: Promise<void>;
   result?: JsonObject;
 }
 
@@ -99,12 +100,15 @@ class WorkflowFailure extends Error {
 }
 
 const MAX_STALL_BACKOFF_MS = 2_000;
+const DEFAULT_WAIT_MS = 90_000;
+// Stays under common MCP client tool-call timeouts.
+const MAX_WAIT_MS = 120_000;
 
 export const SESSION_TOOL: Tool = {
   name: "devbench.session",
   description:
     "Control one explicitly configured, controller-owned DevBench game session. " +
-    "status is always local. start/run are asynchronous and return a runId. run loads a required named fixture, waits for the correlated native operation and player readiness, runs a server-side scenario asynchronously, captures evidence, and stops or releases only the owned game. stop also reclaims a game an earlier bridge launched and never released; force:true terminates it after the graceful timeout, even after an uncertain mutation. No deployment, profile edits, arbitrary commands, or adoption of other games. " +
+    "status is always local. start/run are asynchronous and return a runId; wait blocks until that job finishes (or timeoutMs elapses) and returns status, so call wait instead of polling. run loads a required named fixture, waits for the correlated native operation and player readiness, runs a server-side scenario asynchronously, captures evidence, and stops or releases only the owned game. stop also reclaims a game an earlier bridge launched and never released; force:true terminates it after the graceful timeout, even after an uncertain mutation. No deployment, profile edits, arbitrary commands, or adoption of other games. " +
     sessionBoundsDescription(),
   inputSchema: {
     type: "object",
@@ -113,9 +117,16 @@ export const SESSION_TOOL: Tool = {
     properties: {
       action: {
         type: "string",
-        enum: ["status", "start", "run", "stop", "cancel"],
+        enum: ["status", "start", "run", "wait", "stop", "cancel"],
       },
       runId: { type: "string" },
+      timeoutMs: {
+        type: "integer",
+        minimum: 1,
+        maximum: MAX_WAIT_MS,
+        default: DEFAULT_WAIT_MS,
+        description: "Longest wait blocks; it returns as soon as the job finishes.",
+      },
       fixture: {
         type: "string",
         minLength: 1,
@@ -168,10 +179,20 @@ export class SessionController {
         case "status":
           return { value: this.status(), isError: false };
         case "start":
-          return { value: this.queueStart(), isError: false };
-        case "run":
           return {
-            value: this.queueRun(await parseRunArguments(args)),
+            value: this.queue("start", (job) => this.executeStart(job)),
+            isError: false,
+          };
+        case "run": {
+          const runArgs = await parseRunArguments(args);
+          return {
+            value: this.queue("run", (job) => this.executeRun(job, runArgs)),
+            isError: false,
+          };
+        }
+        case "wait":
+          return {
+            value: await this.wait(args.runId, args.timeoutMs),
             isError: false,
           };
         case "stop":
@@ -234,16 +255,35 @@ export class SessionController {
     }
   }
 
-  private queueStart(): JsonObject {
-    const job = this.createJob("start");
-    void this.executeJob(job, () => this.executeStart(job));
-    return { queued: true, runId: job.id, action: "start" };
+  private queue(
+    kind: JobRecord["kind"],
+    work: (job: JobRecord) => Promise<JsonObject>,
+  ): JsonObject {
+    const job = this.createJob(kind);
+    job.finished = this.executeJob(job, () => work(job));
+    return { queued: true, runId: job.id, action: kind };
   }
 
-  private queueRun(args: RunArguments): JsonObject {
-    const job = this.createJob("run");
-    void this.executeJob(job, () => this.executeRun(job, args));
-    return { queued: true, runId: job.id, action: "run" };
+  private async wait(runId: unknown, timeoutMs: unknown): Promise<JsonObject> {
+    const bound = timeoutMs ?? DEFAULT_WAIT_MS;
+    if (
+      typeof bound !== "number" ||
+      !Number.isInteger(bound) ||
+      bound < 1 ||
+      bound > MAX_WAIT_MS
+    ) {
+      throw new Error(`timeoutMs must be an integer from 1 to ${String(MAX_WAIT_MS)}`);
+    }
+    const job = this.activeJob;
+    if (runId !== undefined && runId !== job?.id && runId !== this.lastJob?.id) {
+      throw new Error(`unknown session job ${JSON.stringify(runId)}`);
+    }
+    if (job?.finished && (runId === undefined || runId === job.id)) {
+      const timer = new AbortController();
+      await Promise.race([job.finished, delay(bound, timer.signal).catch(() => undefined)]);
+      timer.abort();
+    }
+    return this.status();
   }
 
   private createJob(kind: "start" | "run"): JobRecord {

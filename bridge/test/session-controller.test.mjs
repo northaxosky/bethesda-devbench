@@ -579,13 +579,13 @@ async function writeRuntime(path, identity) {
 }
 
 async function waitForJob(controller, runId) {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const status = controller.status();
-    if (status.job?.runId === runId && status.job.state === "done") return status;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  const waited = await controller.handle({ action: "wait", runId, timeoutMs: 5_000 });
+  assert.equal(waited.isError, false, JSON.stringify(waited.value));
+  const status = waited.value;
+  if (status.job?.runId !== runId || status.job.state !== "done") {
+    assert.fail(`timed out waiting for ${runId}`);
   }
-  assert.fail(`timed out waiting for ${runId}`);
+  return status;
 }
 
 async function readBody(request) {

@@ -101,6 +101,6 @@ export function sessionBoundsDescription(t: SessionTimings = DEFAULT_SESSION_TIM
     `fixture load to player ready <=${seconds(t.loadTimeoutMs)}, ` +
     `scenario run <=${seconds(t.scenarioTimeoutMs)} of scenario time, ` +
     `graceful stop <=${seconds(t.gracefulStopTimeoutMs)}. ` +
-    "Poll status every 1-2 s; when a bound is exceeded, stop and report, and never retry a mutation."
+    "After start/run, call wait; when a bound is exceeded, stop and report, and never retry a mutation."
   );
 }

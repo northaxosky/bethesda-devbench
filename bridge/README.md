@@ -120,6 +120,8 @@ written to `%LOCALAPPDATA%\devbench\launch-shim.log`.
 - `start`: asynchronously launch a new game through the Windows helper and wait
   for matching runtime, process-creation, executable, loaded DLL path/hash, and
   runtime-version evidence.
+- `wait`: block until the active job finishes, then return `status`. Returns
+  early after `timeoutMs` (default 90 s, max 120 s) with the job still running.
 - `run`: asynchronously start or reuse only the already-owned game while it is
   still running, load the required named `fixture`, wait for the same native
   `operationId` to succeed and for `inspect{kind:"state"}.playerLoaded`, launch
@@ -180,8 +182,8 @@ capped at 30 s, the host caps a whole scenario run at 60 s, and capture defaults
 to 6 s (replay load gates inherit the 10 s gate default). Raising
 `scenarioTimeoutMs` does not raise the host's run cap.
 
-Rule for agents: poll `devbench.session` status every 1-2 s, never wait longer
-than the bound, and report instead of retrying a mutation.
+Rule for agents: after `start` or `run`, call `wait` instead of polling
+`status`, and report instead of retrying a mutation.
 
 Synchronous `scenario` calls through the proxy get an HTTP timeout of the 60 s
 run cap plus a 15 s margin (requested `timeoutMs` plus margin for `capture` and
