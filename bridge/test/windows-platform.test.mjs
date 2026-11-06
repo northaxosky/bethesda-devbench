@@ -15,7 +15,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import test from "node:test";
 
-import { TIMING_MAXIMA } from "../dist/timeouts.js";
+// Mirrors PLATFORM_START_CEILING_MS once timeouts.ts exports it.
+const PLATFORM_START_MAXIMUM_MS = 60_000;
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const bridgeDirectory = path.dirname(testDirectory);
@@ -40,6 +41,7 @@ const gameExe = path.join(temporaryDirectory, "SyntheticGame.exe");
 const profilesDir = path.join(temporaryDirectory, "profiles");
 const profile = "Synthetic Profile";
 const delayFile = path.join(temporaryDirectory, "delay-ms.txt");
+const gameExitFlag = path.join(temporaryDirectory, "game-exit.flag");
 // Keeps ownership records out of the real profile.
 process.env.LOCALAPPDATA = path.join(temporaryDirectory, "local");
 
@@ -135,6 +137,8 @@ class HelperClient {
     this.stderr = "";
     this.lines = [];
     this.waiters = [];
+    this.events = [];
+    this.eventWaiters = [];
     this.exited = false;
     this.exitPromise = once(this.child, "exit").then(([code, signal]) => {
       this.exited = true;
@@ -153,6 +157,13 @@ class HelperClient {
     });
     this.reader = createInterface({ input: this.child.stdout });
     this.reader.on("line", (line) => {
+      const message = JSON.parse(line);
+      if (message.event !== undefined) {
+        const eventWaiter = this.eventWaiters.shift();
+        if (eventWaiter) eventWaiter(message);
+        else this.events.push(message);
+        return;
+      }
       const waiter = this.waiters.shift();
       if (waiter) {
         waiter.resolve(line);
@@ -185,6 +196,20 @@ class HelperClient {
           clearTimeout(timeout);
           reject(error);
         },
+      });
+    });
+  }
+
+  nextEvent(timeoutMs = 10_000) {
+    if (this.events.length !== 0) return Promise.resolve(this.events.shift());
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error(`Timed out waiting for helper event.\n${this.stderr}`)),
+        timeoutMs,
+      );
+      this.eventWaiters.push((event) => {
+        clearTimeout(timeout);
+        resolve(event);
       });
     });
   }
@@ -303,6 +328,7 @@ async function resetFixture(delayMs = 0) {
     removeIfPresent(path.join(temporaryDirectory, "loader.pid")),
     removeIfPresent(path.join(temporaryDirectory, "game.pid")),
     removeIfPresent(path.join(temporaryDirectory, "forward.pipe")),
+    removeIfPresent(gameExitFlag),
   ]);
   await writeFile(delayFile, String(delayMs), "utf8");
 }
@@ -357,7 +383,7 @@ test.after(async () => {
   await rm(temporaryDirectory, { recursive: true, force: true });
 });
 
-test("keeps JSONL alive after malformed input and rejects unowned close", async () => {
+test("keeps JSONL alive after malformed input and rejects unowned requestClose", async () => {
   const helper = new HelperClient();
   try {
     const malformed = await helper.raw("{not-json");
@@ -377,7 +403,7 @@ test("keeps JSONL alive after malformed input and rejects unowned close", async 
       result: { owned: false, running: false },
     });
 
-    const close = await helper.request({ id: 2, op: "close", timeoutMs: 50 });
+    const close = await helper.request({ id: 2, op: "requestClose" });
     assert.equal(close.id, 2);
     assert.equal(close.ok, false);
     assert.equal(close.error.code, "NO_OWNED_GAME");
@@ -453,20 +479,14 @@ test("rejects profile traversal before launching anything", async () => {
   }
 });
 
-test("helper timeout maxima match the bridge's configurable maxima", async () => {
+test("helper start timeout maximum is enforced", async () => {
   await resetFixture();
   const helper = new HelperClient();
   try {
     const start = await helper.request(
-      startRequest(21, TIMING_MAXIMA.platformStartTimeoutMs + 1),
+      startRequest(21, PLATFORM_START_MAXIMUM_MS + 1),
     );
     assert.equal(start.error.code, "INVALID_TIMEOUT");
-    const close = await helper.request({
-      id: 22,
-      op: "close",
-      timeoutMs: TIMING_MAXIMA.gracefulStopTimeoutMs + 1,
-    });
-    assert.equal(close.error.code, "INVALID_TIMEOUT");
   } finally {
     await helper.dispose();
   }
@@ -496,12 +516,6 @@ test("non-admin shim proves synthetic MO2-loader-game ownership despite rapid lo
       Number.parseInt(await readFile(path.join(temporaryDirectory, "mo2.pid"), "utf8"), 10),
     );
 
-    const close = await helper.request({ id: 31, op: "close", timeoutMs: 50 });
-    assert.equal(close.ok, true);
-    assert.equal(close.result.exited, false);
-    assert.equal(close.result.reason, "timeout");
-    assert.equal(close.result.owned, true);
-
     const terminated = await helper.request({ id: 32, op: "terminate" });
     assert.equal(terminated.ok, true, JSON.stringify(terminated));
     assert.equal(terminated.result.exited, true);
@@ -512,6 +526,110 @@ test("non-admin shim proves synthetic MO2-loader-game ownership despite rapid lo
     if (existing.exitCode === null) existing.kill();
     await existingExit;
   }
+});
+
+async function startOwnedGame(helper, id) {
+  const started = await helper.request(startRequest(id), 20_000);
+  assert.equal(started.ok, true, JSON.stringify(started));
+  return started.result;
+}
+
+async function withServingMo2(body) {
+  const mo2 = spawn(mo2Exe, ["--serve"], { stdio: "ignore", windowsHide: true });
+  const mo2Exit = once(mo2, "exit");
+  try {
+    await waitForFile(path.join(temporaryDirectory, "forward.pipe"));
+    await body();
+  } finally {
+    if (mo2.exitCode === null) mo2.kill();
+    await mo2Exit;
+  }
+}
+
+test("reports a self-exiting game and its shim once each as helper events", async () => {
+  await resetFixture();
+  await withServingMo2(async () => {
+    const helper = new HelperClient();
+    try {
+      const started = await startOwnedGame(helper, 40);
+      await writeFile(gameExitFlag, "", "utf8");
+      const events = [await helper.nextEvent(), await helper.nextEvent()];
+      const game = events.find((event) => event.event === "gameExited");
+      assert.deepEqual(game, {
+        event: "gameExited",
+        pid: started.pid,
+        creationTime: started.creationTime,
+        exitCode: 7,
+      });
+      assert.equal(events.filter((event) => event.event === "shimExited").length, 1);
+
+      const status = await helper.request({ id: 41, op: "status" });
+      assert.equal(status.ok, true);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assert.deepEqual(helper.events, []);
+    } finally {
+      await helper.dispose();
+    }
+  });
+});
+
+test("requestClose returns immediately and the exit arrives as an event", async () => {
+  await resetFixture();
+  await withServingMo2(async () => {
+    const helper = new HelperClient();
+    try {
+      const started = await startOwnedGame(helper, 50);
+      const close = await helper.request({ id: 51, op: "requestClose" });
+      assert.deepEqual(close, {
+        id: 51,
+        ok: true,
+        result: { requested: true, running: true },
+      });
+      assert.deepEqual(helper.events, []);
+
+      await writeFile(gameExitFlag, "", "utf8");
+      const events = [await helper.nextEvent(), await helper.nextEvent()];
+      assert.ok(events.some((event) => event.event === "gameExited" && event.pid === started.pid));
+
+      const again = await helper.request({ id: 52, op: "requestClose" });
+      assert.equal(again.ok, true);
+      assert.deepEqual(again.result, { requested: false, running: false });
+    } finally {
+      await helper.dispose();
+    }
+  });
+});
+
+test("emits no event for a released game that later exits", async () => {
+  await resetFixture();
+  await withServingMo2(async () => {
+    const helper = new HelperClient();
+    try {
+      const started = await startOwnedGame(helper, 60);
+      const released = await helper.request({ id: 61, op: "release" });
+      assert.equal(released.ok, true, JSON.stringify(released));
+      assert.equal(released.result.running, true);
+
+      await writeFile(gameExitFlag, "", "utf8");
+      const deadline = Date.now() + 10_000;
+      const alive = () => {
+        try {
+          process.kill(started.pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      while (alive() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.equal(alive(), false);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assert.deepEqual(helper.events, []);
+    } finally {
+      await helper.dispose();
+    }
+  });
 });
 
 test("does not start MO2 when the configured instance is closed", async () => {

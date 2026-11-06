@@ -49,6 +49,20 @@ export interface InspectedProcess {
   plugin: { path: string; sha256: string } | null;
 }
 
+export interface CloseRequest {
+  requested: boolean;
+  running: boolean;
+}
+
+export type PlatformEvent =
+  | {
+      event: "gameExited";
+      pid: number;
+      creationTime: string;
+      exitCode: number | null;
+    }
+  | { event: "shimExited"; pid: number };
+
 export interface CloseResult {
   exited: boolean;
   reason?: string;
@@ -63,8 +77,11 @@ export interface NativePlatform {
     gameExe: string;
     pluginName?: "devbench.dll";
   }): Promise<InspectedProcess>;
-  close(timeoutMs: number): Promise<CloseResult>;
+  // Posts a graceful close and returns at once; exit arrives as gameExited.
+  requestClose(): Promise<CloseRequest>;
   terminate(): Promise<CloseResult>;
+  // Unsolicited helper events; returns the unsubscribe function.
+  onEvent(listener: (event: PlatformEvent) => void): () => void;
   release(): Promise<void>;
   // Retakes a game an earlier helper launched and exited without releasing.
   reclaim(gameExe: string): Promise<StartedProcess>;
@@ -89,6 +106,7 @@ export class PlatformCallError extends Error {
 export class WindowsSessionPlatform implements NativePlatform {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingCall>();
+  private readonly listeners = new Set<(event: PlatformEvent) => void>();
   private nextId = 1;
   private closed = false;
 
@@ -147,11 +165,17 @@ export class WindowsSessionPlatform implements NativePlatform {
     );
   }
 
-  async close(timeoutMs: number): Promise<CloseResult> {
-    return parseClose(
-      // The helper waits up to timeoutMs for the game, then again for its shim.
-      await this.call("close", { timeoutMs }, 2 * timeoutMs + 5_000),
+  async requestClose(): Promise<CloseRequest> {
+    return parseCloseRequest(
+      await this.call("requestClose", {}, this.defaultTimeoutMs),
     );
+  }
+
+  onEvent(listener: (event: PlatformEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   async terminate(): Promise<CloseResult> {
@@ -216,6 +240,10 @@ export class WindowsSessionPlatform implements NativePlatform {
       );
       return;
     }
+    if (isObject(value) && value.id === undefined && "event" in value) {
+      this.handleEvent(value);
+      return;
+    }
     if (!isObject(value) || !Number.isSafeInteger(value.id)) {
       this.failAll(new Error("Windows session helper emitted an invalid envelope"));
       return;
@@ -239,6 +267,40 @@ export class WindowsSessionPlatform implements NativePlatform {
       return;
     }
     pending.reject(new Error("Windows session helper returned an invalid response"));
+  }
+
+  private handleEvent(value: Record<string, unknown>): void {
+    let event: PlatformEvent;
+    try {
+      const name = requireString(value, "event", "platform event");
+      if (name === "gameExited") {
+        event = {
+          event: name,
+          pid: requireInteger(value, "pid", "platform event"),
+          creationTime: requireString(value, "creationTime", "platform event"),
+          exitCode:
+            value.exitCode === null
+              ? null
+              : requireInteger(value, "exitCode", "platform event"),
+        };
+      } else if (name === "shimExited") {
+        event = {
+          event: name,
+          pid: requireInteger(value, "pid", "platform event"),
+        };
+      } else {
+        process.stderr.write(
+          `[platform] Ignoring unknown helper event: ${name}\n`,
+        );
+        return;
+      }
+    } catch (error) {
+      this.failAll(
+        new Error(`Windows session helper emitted an invalid event: ${errorMessage(error)}`),
+      );
+      return;
+    }
+    for (const listener of [...this.listeners]) listener(event);
   }
 
   private failAll(error: Error): void {
@@ -361,6 +423,14 @@ function parseInspect(value: unknown): InspectedProcess {
     ),
     plugin: parsedPlugin,
   };
+}
+
+function parseCloseRequest(value: unknown): CloseRequest {
+  const object = requireObject(value, "platform requestClose");
+  if (typeof object.requested !== "boolean" || typeof object.running !== "boolean") {
+    throw new Error("platform requestClose must contain requested/running booleans");
+  }
+  return { requested: object.requested, running: object.running };
 }
 
 function parseClose(value: unknown): CloseResult {

@@ -88,6 +88,7 @@ internal static class SyntheticProcessTree
             Stopwatch lifetime = Stopwatch.StartNew();
             while (lifetime.Elapsed < TimeSpan.FromSeconds(30))
             {
+                if (File.Exists(Path.Combine(directory, "game-exit.flag"))) return 7;
                 Thread.Sleep(100);
             }
             return 0;

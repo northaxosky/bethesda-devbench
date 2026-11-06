@@ -130,9 +130,15 @@ namespace BethesdaDevBench.WindowsSession
         public string ImagePath;
         public int Mo2Pid;
         public bool Running;
+        public ExitWatch Watch;
 
         public void Dispose()
         {
+            if (Watch != null)
+            {
+                Watch.Dispose();
+                Watch = null;
+            }
             if (Handle != null)
             {
                 Handle.Dispose();
@@ -142,6 +148,152 @@ namespace BethesdaDevBench.WindowsSession
             {
                 ShimHandle.Dispose();
                 ShimHandle = null;
+            }
+        }
+    }
+
+    // The only stdout writer, so responses and events never interleave.
+    public static class HelperOutput
+    {
+        private static readonly object Gate = new object();
+
+        public static void WriteLine(string line)
+        {
+            lock (Gate)
+            {
+                Console.Out.WriteLine(line);
+                Console.Out.Flush();
+            }
+        }
+    }
+
+    // Kernel-waits on duplicated handles and reports each exit once.
+    internal sealed class ExitWatch : IDisposable
+    {
+        private sealed class Target
+        {
+            public SafeProcessHandle Handle;
+            public ManualResetEvent Event;
+            public RegisteredWaitHandle Registration;
+            public bool Emitted;
+            public bool IsGame;
+        }
+
+        private readonly object gate_ = new object();
+        private readonly List<Target> targets_ = new List<Target>();
+        private readonly int gamePid_;
+        private readonly string creationTime_;
+        private readonly int shimPid_;
+        private bool disarmed_;
+
+        internal ExitWatch(OwnedSession session)
+        {
+            gamePid_ = session.Pid;
+            creationTime_ = session.CreationTime;
+            shimPid_ = session.ShimPid;
+            try
+            {
+                lock (gate_)
+                {
+                    Add(session.Handle, true);
+                    Add(session.ShimHandle, false);
+                }
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        private void Add(SafeProcessHandle source, bool isGame)
+        {
+            if (source == null)
+            {
+                return;
+            }
+            Target target = new Target();
+            target.IsGame = isGame;
+            target.Handle = ShimNative.Duplicate(ShimNative.GetCurrentProcess(), source.DangerousGetHandle());
+            target.Event = new ManualResetEvent(false);
+            target.Event.SafeWaitHandle = new SafeWaitHandle(target.Handle.DangerousGetHandle(), false);
+            targets_.Add(target);
+            target.Registration = ThreadPool.RegisterWaitForSingleObject(
+                target.Event,
+                delegate(object state, bool timedOut) { Fire((Target)state); },
+                target,
+                Timeout.Infinite,
+                true);
+        }
+
+        private void Fire(Target target)
+        {
+            lock (gate_)
+            {
+                Emit(target);
+            }
+        }
+
+        // Reports exits already signaled; called when the owner sees them first.
+        internal void EmitSignaled()
+        {
+            lock (gate_)
+            {
+                foreach (Target target in targets_)
+                {
+                    if (NativeMethods.WaitForSingleObject(target.Handle, 0) == NativeMethods.WAIT_OBJECT_0)
+                    {
+                        Emit(target);
+                    }
+                }
+            }
+        }
+
+        private void Emit(Target target)
+        {
+            if (disarmed_ || target.Emitted)
+            {
+                return;
+            }
+            target.Emitted = true;
+            if (!target.IsGame)
+            {
+                HelperOutput.WriteLine(
+                    "{\"event\":\"shimExited\",\"pid\":" +
+                    shimPid_.ToString(CultureInfo.InvariantCulture) + "}");
+                return;
+            }
+            uint code;
+            string exitCode = NativeMethods.GetExitCodeProcess(target.Handle, out code) &&
+                code != NativeMethods.STILL_ACTIVE
+                ? code.ToString(CultureInfo.InvariantCulture)
+                : "null";
+            // creationTime is ToIso output: ASCII digits and punctuation only.
+            HelperOutput.WriteLine(
+                "{\"event\":\"gameExited\",\"pid\":" +
+                gamePid_.ToString(CultureInfo.InvariantCulture) +
+                ",\"creationTime\":\"" + creationTime_ + "\",\"exitCode\":" + exitCode + "}");
+        }
+
+        public void Dispose()
+        {
+            lock (gate_)
+            {
+                if (disarmed_)
+                {
+                    return;
+                }
+                disarmed_ = true;
+                foreach (Target target in targets_)
+                {
+                    if (target.Registration != null)
+                    {
+                        target.Registration.Unregister(null);
+                    }
+                    target.Event.Dispose();
+                    target.Handle.Dispose();
+                }
+                targets_.Clear();
             }
         }
     }
@@ -983,7 +1135,6 @@ namespace BethesdaDevBench.WindowsSession
         public static string ShimScriptPath { get; set; }
         private const int MaximumLineCharacters = 1024 * 1024;
         private const int MaximumStartTimeoutMs = 60 * 1000;
-        private const int MaximumCloseTimeoutMs = 30 * 1000;
         private const int TerminateWaitMs = 5000;
         private Mutex lease_;
         private bool leaseHeld_;
@@ -1031,8 +1182,8 @@ namespace BethesdaDevBench.WindowsSession
                     case "inspect":
                         result = Inspect(request);
                         break;
-                    case "close":
-                        result = Close(request);
+                    case "requestClose":
+                        result = RequestClose();
                         break;
                     case "terminate":
                         result = Terminate();
@@ -1543,6 +1694,10 @@ namespace BethesdaDevBench.WindowsSession
         // The game exited or was handed off, so no later helper may reclaim it.
         private void ForgetOwned()
         {
+            if (owned_.Watch != null)
+            {
+                owned_.Watch.EmitSignaled();
+            }
             OwnerRecord.Delete(owned_.ImagePath);
             owned_.Dispose();
             ReleaseLease();
@@ -1651,6 +1806,7 @@ namespace BethesdaDevBench.WindowsSession
                 owned_ = LaunchShim.Start(mo2Image, profile, executable, gameImage, loader, timeoutMs);
                 unresolvedLaunchAttempt_ = false;
                 OwnerRecord.Write(owned_);
+                ArmExitWatch(owned_);
                 RefreshOwned();
                 return SessionResult(owned_, true);
             }
@@ -1667,6 +1823,19 @@ namespace BethesdaDevBench.WindowsSession
                     ReleaseLease();
                 }
                 throw;
+            }
+        }
+
+        private static void ArmExitWatch(OwnedSession session)
+        {
+            try
+            {
+                session.Watch = new ExitWatch(session);
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(
+                    "[windows-session] Arming exit events failed: " + exception.Message);
             }
         }
 
@@ -1792,9 +1961,8 @@ namespace BethesdaDevBench.WindowsSession
             return true;
         }
 
-        private object Close(Dictionary<string, object> request)
+        private object RequestClose()
         {
-            int timeoutMs = RequireTimeout(request, "timeoutMs", MaximumCloseTimeoutMs);
             RefreshOwned();
             if (owned_ == null)
             {
@@ -1802,33 +1970,16 @@ namespace BethesdaDevBench.WindowsSession
                     "NO_OWNED_GAME",
                     "There is no retained owned game process to close.");
             }
-            if (!owned_.Running)
-            {
-                Dictionary<string, object> alreadyExited = SessionResult(owned_, false);
-                alreadyExited["exited"] = FinishOwnedExit(timeoutMs);
-                return alreadyExited;
-            }
-
-            if (!WindowsProcess.RevalidateOwned(owned_))
+            if (owned_.Running && !WindowsProcess.RevalidateOwned(owned_))
             {
                 owned_.Running = false;
-                Dictionary<string, object> exitedDuringValidation =
-                    SessionResult(owned_, false);
-                exitedDuringValidation["exited"] = FinishOwnedExit(timeoutMs);
-                return exitedDuringValidation;
             }
-            WindowsProcess.RequestClose(owned_.Pid);
-            bool exited = WindowsProcess.WaitForExit(owned_.Handle, timeoutMs);
-            if (exited)
+            Dictionary<string, object> result = new Dictionary<string, object>();
+            result["requested"] = owned_.Running;
+            result["running"] = owned_.Running;
+            if (owned_.Running)
             {
-                exited = FinishOwnedExit(timeoutMs);
-            }
-
-            Dictionary<string, object> result = SessionResult(owned_, false);
-            result["exited"] = exited;
-            if (!exited)
-            {
-                result["reason"] = owned_.Running ? "timeout" : "launch shim still completing";
+                WindowsProcess.RequestClose(owned_.Pid);
             }
             return result;
         }
@@ -1902,6 +2053,7 @@ namespace BethesdaDevBench.WindowsSession
                     "NO_RECLAIMABLE_GAME",
                     "No earlier controller left this game running without releasing it.");
             }
+            ArmExitWatch(owned_);
             return SessionResult(owned_, true);
         }
 
@@ -2028,8 +2180,7 @@ try {
         }
 
         $json = ConvertTo-Json -InputObject $response -Compress -Depth 8
-        [Console]::Out.WriteLine($json)
-        [Console]::Out.Flush()
+        [BethesdaDevBench.WindowsSession.HelperOutput]::WriteLine($json)
     }
 }
 finally {
