@@ -40,6 +40,7 @@ export type Verdict =
 export interface WaitCondition {
   readonly until: string;
   readonly topics: readonly string[];
+  readonly label?: string;
   evaluate?(ctx: ConditionContext, input: ConditionInput): Promise<Verdict>;
   drive?(ctx: ConditionContext): Promise<JsonObject>;
 }
@@ -234,6 +235,7 @@ export function eventOccurred(target: {
   return {
     until: "event",
     topics: [topic],
+    label: `event "${topic}"${match ? ` ${JSON.stringify(match)}` : ""}`,
     evaluate: (_ctx, input) => Promise.resolve(check(input)),
   };
 }

@@ -173,7 +173,11 @@ export const SESSION_TOOL: Tool = {
       actionCursor: { type: "integer", description: "playerReady: events after this seq count for load failure." },
       name: { type: "string", description: "menu: menu name." },
       open: { type: "boolean", default: true, description: "menu: wait for open (true) or closed (false)." },
-      topic: { type: "string", description: "event: event topic." },
+      topic: {
+        type: "string",
+        description:
+          "event: exact published topic, never invented. Core: lifecycle (data.event: postLoadGame, gameLoaded, canLoadChanged, mainMenuEntered, ...; match {event}), menu {name, opening}, health.stalled, health.resumed, scenario.started, scenario.step, scenario.finished, capture.saved; plugins add their own (e.g. communityshaders.*). Use until:playerReady for player readiness.",
+      },
       match: { type: "object", description: "event: shallow payload match." },
       after: { type: "integer", description: "event: only events after this seq; fails eventHistoryLost if they were dropped." },
       count: { type: "integer", minimum: 1, description: "frames: rendered frames to wait for." },

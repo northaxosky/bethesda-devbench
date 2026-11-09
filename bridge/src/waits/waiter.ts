@@ -142,7 +142,7 @@ function reportProgress(
   if (!progress) return;
   if (events.length === 0) {
     const seconds = Math.round((performance.now() - started) / 1000);
-    progress(`waiting for ${condition.until} (${String(seconds)} s)`);
+    progress(`waiting for ${condition.label ?? condition.until} (${String(seconds)} s)`);
     return;
   }
   for (const event of events.slice(0, MAX_EVENT_PROGRESS_PER_POLL)) {
