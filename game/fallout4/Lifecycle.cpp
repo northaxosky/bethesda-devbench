@@ -17,6 +17,7 @@ namespace dvb::fallout4::Lifecycle
 			bool                            gameDataReady = false;
 			bool                            gameLoaded = false;
 			bool                            loadInProgress = false;
+			bool                            engineCanLoad = true;
 			bool                            inMainMenu = false;
 			bool                            inLoadingMenu = false;
 			bool                            menuTrackingReady = false;
@@ -56,6 +57,35 @@ namespace dvb::fallout4::Lifecycle
 				return events->HeadSeq();
 			}
 			return 0;
+		}
+
+		// Plugins such as Community Shaders hook the engine predicate to hold
+		// loads, and assume main-thread calls only.
+		void SampleEngineCanLoad() noexcept
+		{
+			try
+			{
+				const bool value = RE::Main::GetCanLoad();
+				{
+					const std::lock_guard lock{ g_state.mutex };
+					if (g_state.engineCanLoad == value)
+						return;
+					g_state.engineCanLoad = value;
+				}
+				Publish("canLoadChanged", json{ { "canLoad", value } });
+			}
+			catch (...)
+			{}
+		}
+
+		void StartEngineCanLoadSampler()
+		{
+			const auto tasks = F4SE::GetTaskInterface();
+			if (!tasks)
+				return;
+			SampleEngineCanLoad();
+			// Permanent tasks run on the main thread once per frame.
+			tasks->AddTaskPermanent([] { SampleEngineCanLoad(); });
 		}
 
 		std::optional<std::string> DecodeMessageName(std::uint32_t a_dataLen, const void* a_data)
@@ -255,6 +285,7 @@ namespace dvb::fallout4::Lifecycle
 				Publish("gameLoaded");
 				break;
 			case F4SE::MessagingInterface::kGameDataReady:
+				StartEngineCanLoadSampler();
 			{
 				const std::lock_guard lock{ g_state.mutex };
 				g_state.gameDataReady = true;
@@ -276,6 +307,7 @@ namespace dvb::fallout4::Lifecycle
 			snapshot.gameDataReady = g_state.gameDataReady;
 			snapshot.gameLoaded = g_state.gameLoaded;
 			snapshot.loadInProgress = g_state.loadInProgress;
+			snapshot.engineCanLoad = g_state.engineCanLoad;
 			snapshot.inMainMenu = g_state.inMainMenu;
 			snapshot.inLoadingMenu = g_state.inLoadingMenu;
 			snapshot.menuTrackingReady = g_state.menuTrackingReady;

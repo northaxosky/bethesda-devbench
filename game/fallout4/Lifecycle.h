@@ -19,6 +19,7 @@ namespace dvb::fallout4::Lifecycle
 		bool                                        gameDataReady = false;
 		bool                                        gameLoaded = false;
 		bool                                        loadInProgress = false;
+		bool                                        engineCanLoad = true;
 		bool                                        inMainMenu = false;
 		bool                                        inLoadingMenu = false;
 		bool                                        menuTrackingReady = false;

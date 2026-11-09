@@ -242,7 +242,9 @@ namespace dvb::fallout4
 				{ "ready", ready },
 				{ "canAdvanceTime", ready },
 				{ "canLoad",
-					snapshot.gameDataReady && !snapshot.inLoadingMenu && !snapshot.loadInProgress },
+					snapshot.gameDataReady && snapshot.engineCanLoad && !snapshot.inLoadingMenu &&
+						!snapshot.loadInProgress },
+				{ "engineCanLoad", snapshot.engineCanLoad },
 				{ "canSave", ready },
 				{ "gameDataReady", snapshot.gameDataReady },
 				{ "gameLoaded", snapshot.gameLoaded },
@@ -379,6 +381,12 @@ namespace dvb::fallout4
 					.accepted = false,
 					.errorCode = 409,
 					.error = "a game load is already in progress",
+				};
+			if (a_request.kind == tools::GameOperationKind::kLoad && !lifecycle.engineCanLoad)
+				return {
+					.accepted = false,
+					.errorCode = 409,
+					.error = "the engine is holding loads (Main::GetCanLoad is false; e.g. shaders still compiling)",
 				};
 			if (a_request.kind == tools::GameOperationKind::kSave &&
 				(lifecycle.inMainMenu || !RE::PlayerCharacter::GetSingleton()))
