@@ -138,6 +138,8 @@ notifications (when the request has a `progressToken`) and are cancellable.
   started game; use the proxied `await` argument otherwise):
   `canLoad`, `playerReady {operationId?, actionCursor?}`, `menu {name, open?}`,
   `event {topic, match?, after?}`, `frames {count}`. Returns a wait result.
+  `canLoad` also waits for the engine's own load gate (`Main::GetCanLoad`), which
+  plugins such as Community Shaders hold while compiling shaders.
 - `stop`: request a graceful close, then wait for the game to exit, the launch shim
   to exit (`release` is refused until it has), and, when `exitMarker` is
   configured, for a line containing `exitMarker.match` appended after this launch.

@@ -111,6 +111,21 @@ test("a message box opening during canLoad fails as modal with its text", async 
   assert.equal(result.detail.snapshot.text, "Missing content");
 });
 
+test("canLoad stays pending while the engine holds loads until it releases them", async (t) => {
+  const { server, remote } = await setup(t, { engineCanLoad: false });
+  let settled = false;
+  const pending = wait(remote, canLoad()).finally(() => (settled = true));
+  await server.nextHold();
+  server.publish("lifecycle", { event: "postPostLoad" });
+  await server.nextHold();
+  assert.equal(settled, false);
+  server.game.engineCanLoad = true;
+  server.publish("lifecycle", { event: "canLoadChanged", canLoad: true });
+  const result = await pending;
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.satisfied.status.engineCanLoad, true);
+});
+
 test("disabled native actions fail canLoad immediately", async (t) => {
   const { remote } = await setup(t, { actionsAllowed: false });
   const result = await wait(remote, canLoad());

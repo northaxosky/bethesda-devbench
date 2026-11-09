@@ -142,7 +142,7 @@ export const SESSION_TOOL: Tool = {
     "start launches the game and returns at canLoad. " +
     "run launches (or reuses the owned game), waits for canLoad, loads the required named fixture, waits for player readiness of that load, runs a server-side scenario until its scenario.finished event, captures evidence, then stops or releases only the owned game. " +
     "detach:true on start/run returns {queued, runId} at once; wait {runId} then blocks until that job finishes. " +
-    "wait {until} blocks on a condition against the owned game: canLoad, playerReady {operationId?, actionCursor?}, menu {name, open?}, event {topic, match?, after?} (match alone also scans events fired before the wait), frames {count}; " +
+    "wait {until} blocks on a condition against the owned game: canLoad (also waits for the engine's own load gate, Main::GetCanLoad, which plugins such as Community Shaders hold while compiling shaders), playerReady {operationId?, actionCursor?}, menu {name, open?}, event {topic, match?, after?} (match alone also scans events fired before the wait), frames {count}; " +
     "for a game this controller does not own, use the await argument of proxied tools instead. " +
     "stop closes the owned game and returns after the game exits, the launch shim exits, and the configured exit marker line (RootBuilder cleanup) appears; force:true terminates it when the stop ceiling passes, even after an uncertain mutation; it also reclaims a game an earlier bridge launched and never released. " +
     "Waits end at once on the real failure signal, with reason exited, crashed, stalled, modal, loadFailed, actionsDisabled, eventHistoryLost, unavailable, cancelled, or ceiling (a safety ceiling, 10 min by default, never the expected path). " +
