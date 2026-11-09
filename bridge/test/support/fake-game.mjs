@@ -213,7 +213,6 @@ export async function startGameServer(fixture, options = {}) {
   };
   const game = {
     ready: options.ready ?? true,
-    engineCanLoad: options.engineCanLoad ?? true,
     op: null,
     playerLoaded: false,
     openMenus: [],
@@ -340,8 +339,7 @@ export async function startGameServer(fixture, options = {}) {
       return json(response, {
         actionsAllowed: options.actionsAllowed ?? true,
         gameLoaded: game.ready,
-        canLoad: game.ready && game.engineCanLoad,
-        engineCanLoad: game.engineCanLoad,
+        canLoad: game.ready,
         operation: game.op,
       });
     }

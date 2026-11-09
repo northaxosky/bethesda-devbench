@@ -17,7 +17,7 @@ namespace dvb::fallout4::Lifecycle
 			bool                            gameDataReady = false;
 			bool                            gameLoaded = false;
 			bool                            loadInProgress = false;
-			bool                            engineCanLoad = true;
+			bool                            engineCanLoad = false;
 			bool                            inMainMenu = false;
 			bool                            inLoadingMenu = false;
 			bool                            menuTrackingReady = false;
@@ -59,8 +59,7 @@ namespace dvb::fallout4::Lifecycle
 			return 0;
 		}
 
-		// Plugins such as Community Shaders hook the engine predicate to hold
-		// loads, and assume main-thread calls only.
+		// CS's GetCanLoad detour assumes main-thread callers; sample it per frame.
 		void SampleEngineCanLoad() noexcept
 		{
 			try
@@ -83,8 +82,6 @@ namespace dvb::fallout4::Lifecycle
 			const auto tasks = F4SE::GetTaskInterface();
 			if (!tasks)
 				return;
-			SampleEngineCanLoad();
-			// Permanent tasks run on the main thread once per frame.
 			tasks->AddTaskPermanent([] { SampleEngineCanLoad(); });
 		}
 
