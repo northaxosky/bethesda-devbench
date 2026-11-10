@@ -240,6 +240,8 @@ namespace dvb
 			// before giving up with an empty 400. Shorten this so that mistake fails fast
 			// instead of stalling; GET /api/health is the real fix for liveness checks.
 			http->set_read_timeout(2, 0);
+			// httplib pins a worker per keep-alive socket; idle bridges starve the pool.
+			http->set_keep_alive_max_count(1);
 			m_restAdapter->Mount(*http);
 			g_await = std::make_unique<waits::AwaitService>(m_events, &game::CurrentFrame);
 			g_await->Mount(*http);
