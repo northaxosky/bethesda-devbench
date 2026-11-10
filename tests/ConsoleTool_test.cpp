@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "tools/BoundedTextLog.h"
 #include "tools/ConsoleTool.h"
 
 using dvb::json;
@@ -192,4 +193,16 @@ TEST_CASE("console bounds pending submissions and capture bookkeeping")
 	CHECK(Invoke(
 			  captureRegistry, json{ { "action", "read" }, { "captureId", firstId } })
 			  .errorCode == 404);
+}
+
+TEST_CASE("bounded console log drops the oldest whole lines and keeps the newest")
+{
+	dvb::tools::BoundedTextLog log(64);
+	for (int i = 0; i < 100; ++i)
+		log.Append(std::format("line {:03}\n", i));
+	const auto text = log.Snapshot();
+	CHECK(text.size() <= 64);
+	CHECK(text.starts_with("line "));
+	CHECK(text.ends_with("line 099\n"));
+	CHECK(text.find("line 000") == std::string::npos);
 }

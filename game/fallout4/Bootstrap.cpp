@@ -122,7 +122,8 @@ namespace
 
 	bool InitPlugin(const F4SE::LoadInterface* a_f4se)
 	{
-		F4SE::Init(a_f4se, F4SE::InitInfo{});
+		// Console call-site hooks need one JMP14 slot each.
+		F4SE::Init(a_f4se, F4SE::InitInfo{ .trampoline = true, .trampolineSize = 128 });
 		dvb::InitializeRuntimeContext(dvb::MakeRuntimeContext(
 			dvb::Fallout4Profile(), a_f4se->RuntimeVersion().string("."),
 			reinterpret_cast<const void*>(&InitPlugin),

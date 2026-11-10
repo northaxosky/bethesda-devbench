@@ -1,8 +1,12 @@
 #include "ConsoleBackend.h"
 
 #include "MainThread.h"
+#include "tools/BoundedTextLog.h"
 
+#include <array>
 #include <atomic>
+#include <cstring>
+#include <optional>
 
 namespace dvb::fallout4
 {
@@ -14,8 +18,123 @@ namespace dvb::fallout4
 			       a_command.starts_with("DVBCAPEND");
 		}
 
+		// The engine's own buffer is emptied by the console menu and stops at 64 KB,
+		// so printed text is recorded here instead.
+		constexpr std::size_t kRecordedBytes = 1 << 20;
+
+		struct CallSite
+		{
+			REL::ID                        function;  // contains the call
+			std::array<std::ptrdiff_t, 3>  offset;    // OG, NG, AE; 0 = no site
+			REL::ID                        callee;
+		};
+
+		const REL::ID kAddString{ 764, 2248593 };
+		const REL::ID kPrint{ 799546, 2248592 };
+		const REL::ID kPrintLine{ 1065300, 2248591 };
+
+		// NG and AE share ids and layout. OG's PrintLine only forwards to Print.
+		const CallSite kPrintToAddString{ kPrint, { 0x5F, 0x9E, 0x9E }, kAddString };
+		const CallSite kPrintLineToAddString{ kPrintLine, { 0, 0xA0, 0xA0 }, kAddString };
+
+		bool CallsTarget(std::uintptr_t a_site, std::uintptr_t a_target)
+		{
+			const auto* bytes = reinterpret_cast<const std::uint8_t*>(a_site);
+			if (bytes[0] != 0xE8)
+				return false;
+			std::int32_t displacement;
+			std::memcpy(&displacement, bytes + 1, sizeof(displacement));
+			return a_site + 5 + displacement == a_target;
+		}
+
+		template <class>
+		class CallHook;
+
+		// Patches a call site only while it still calls the expected function.
+		template <class R, class... T>
+		class CallHook<R(T...)>
+		{
+		public:
+			CallHook() = default;
+			CallHook(const CallHook&) = delete;
+			CallHook& operator=(const CallHook&) = delete;
+
+			~CallHook()
+			{
+				if (m_hook && m_hook->GetEnabled())
+					m_hook->Disable();
+			}
+
+			bool Install(const char* a_name, const CallSite& a_site, R (*a_function)(T...))
+			{
+				const auto offset = a_site.offset[static_cast<std::size_t>(REX::FModule::GetRuntimeIndex())];
+				if (!offset)
+					return false;
+				const auto address = a_site.function.address() + offset;
+				if (!CallsTarget(address, a_site.callee.address()))
+				{
+					REX::WARN("devbench: {}: call site bytes differ, not patched", a_name);
+					return false;
+				}
+				m_hook.emplace(a_name, a_site.function, offset, a_function);
+				if (!m_hook->Init() || !m_hook->Enable())
+				{
+					m_hook.reset();
+					return false;
+				}
+				return true;
+			}
+
+			R operator()(T... a_args) const { return (*m_hook)(a_args...); }
+
+		private:
+			std::optional<REL::THook<R(T...)>> m_hook;
+		};
+
+		// Records everything printed to the console.
+		class ConsolePrintHooks
+		{
+		public:
+			ConsolePrintHooks()
+			{
+				s_active.store(this);
+				// NG/AE print through two entry points; OG's PrintLine forwards to Print.
+				m_recording = m_print.Install("devbench console print", kPrintToAddString, &OnAddString);
+				if (kPrintLineToAddString.offset[static_cast<std::size_t>(REX::FModule::GetRuntimeIndex())])
+					m_recording = m_printLine.Install("devbench console printline", kPrintLineToAddString, &OnAddString) && m_recording;
+				if (!m_recording)
+					REX::WARN("{}", "devbench: console print hooks unavailable; reading the engine buffer");
+			}
+
+			ConsolePrintHooks(const ConsolePrintHooks&) = delete;
+			ConsolePrintHooks& operator=(const ConsolePrintHooks&) = delete;
+
+			bool Recording() const { return m_recording; }
+
+			std::string Recorded() const { return m_log.Snapshot(); }
+
+		private:
+			using AddStringFn = std::int64_t(RE::ConsoleLog*, const char*);
+
+			static std::int64_t OnAddString(RE::ConsoleLog* a_log, const char* a_text)
+			{
+				if (auto* active = s_active.load(); active && a_text)
+					active->m_log.Append(a_text);
+				a_log->AddString(a_text);
+				return 0;
+			}
+
+			tools::BoundedTextLog m_log{ kRecordedBytes };
+			CallHook<AddStringFn> m_print;
+			CallHook<AddStringFn> m_printLine;
+			bool                  m_recording = false;
+
+			static inline std::atomic<ConsolePrintHooks*> s_active{ nullptr };
+		};
+
 		tools::ConsoleBackend BuildBackend(
 			EventBus* a_events,
+			const ConsolePrintHooks* a_print = nullptr,
 			std::shared_ptr<void> a_lifetime = {})
 		{
 			return tools::ConsoleBackend{
@@ -65,7 +184,9 @@ namespace dvb::fallout4
 							return false;
 						}
 					},
-				.readBuffer = [] {
+				.readBuffer = [a_print] {
+					if (a_print && a_print->Recording())
+						return a_print->Recorded();
 					const auto result =
 						MainThread::RunAndWait([]() -> json {
 							const auto consoleLog =
@@ -94,7 +215,8 @@ namespace dvb::fallout4
 				"devbench console observation",
 				RE::VTABLE::Console[0],
 				1,
-				&OnConsoleCall)
+				&OnConsoleCall),
+			m_print()
 		{
 			Impl* expected = nullptr;
 			if (!s_active.compare_exchange_strong(expected, this))
@@ -133,6 +255,11 @@ namespace dvb::fallout4
 			return m_events;
 		}
 
+		const ConsolePrintHooks& Print() const
+		{
+			return m_print;
+		}
+
 	private:
 		using Params = Scaleform::GFx::FunctionHandler::Params;
 		using Hook = REL::THookVFT<void(RE::Console*, const Params&)>;
@@ -160,6 +287,7 @@ namespace dvb::fallout4
 
 		EventBus& m_events;
 		Hook      m_hook;
+		ConsolePrintHooks m_print;
 
 		static inline std::atomic<Impl*> s_active{ nullptr };
 	};
@@ -173,7 +301,7 @@ namespace dvb::fallout4
 	tools::ConsoleBackend ConsoleBackendLifetime::Backend() const
 	{
 		return BuildBackend(
-			&m_impl->Events(), std::static_pointer_cast<void>(m_impl));
+			&m_impl->Events(), &m_impl->Print(), std::static_pointer_cast<void>(m_impl));
 	}
 
 	tools::ConsoleBackend MakeConsoleBackend()
