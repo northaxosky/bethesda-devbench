@@ -37,6 +37,9 @@ namespace dvb::tools
 
 		// Return a main-thread snapshot of the native console scrollback buffer.
 		std::function<std::string()> readBuffer;
+
+		// Optional: throws ToolError to refuse a command before anything is queued.
+		std::function<void(const std::string&)> validateCommand;
 	};
 
 	ToolDescriptor BuildConsoleDescriptor();

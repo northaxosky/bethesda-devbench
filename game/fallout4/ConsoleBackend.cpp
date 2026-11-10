@@ -32,10 +32,12 @@ namespace dvb::fallout4
 		const REL::ID kAddString{ 764, 2248593 };
 		const REL::ID kPrint{ 799546, 2248592 };
 		const REL::ID kPrintLine{ 1065300, 2248591 };
+		const REL::ID kExecuteCommand{ 1061864, 2248537 };
 
 		// NG and AE share ids and layout. OG's PrintLine only forwards to Print.
 		const CallSite kPrintToAddString{ kPrint, { 0x5F, 0x9E, 0x9E }, kAddString };
 		const CallSite kPrintLineToAddString{ kPrintLine, { 0, 0xA0, 0xA0 }, kAddString };
+		const CallSite kEchoToPrintLine{ kExecuteCommand, { 0x76, 0x89, 0x89 }, kPrintLine };
 
 		bool CallsTarget(std::uintptr_t a_site, std::uintptr_t a_target)
 		{
@@ -91,7 +93,7 @@ namespace dvb::fallout4
 			std::optional<REL::THook<R(T...)>> m_hook;
 		};
 
-		// Records everything printed to the console.
+		// Records everything printed to the console and keeps typed lines out of printf.
 		class ConsolePrintHooks
 		{
 		public:
@@ -102,8 +104,11 @@ namespace dvb::fallout4
 				m_recording = m_print.Install("devbench console print", kPrintToAddString, &OnAddString);
 				if (kPrintLineToAddString.offset[static_cast<std::size_t>(REX::FModule::GetRuntimeIndex())])
 					m_recording = m_printLine.Install("devbench console printline", kPrintLineToAddString, &OnAddString) && m_recording;
+				m_echoLiteral = m_echo.Install("devbench console echo", kEchoToPrintLine, &OnEcho);
 				if (!m_recording)
 					REX::WARN("{}", "devbench: console print hooks unavailable; reading the engine buffer");
+				if (!m_echoLiteral)
+					REX::WARN("{}", "devbench: console echo not patched; commands containing '%' are refused");
 			}
 
 			ConsolePrintHooks(const ConsolePrintHooks&) = delete;
@@ -111,10 +116,14 @@ namespace dvb::fallout4
 
 			bool Recording() const { return m_recording; }
 
+			bool EchoIsLiteral() const { return m_echoLiteral; }
+
 			std::string Recorded() const { return m_log.Snapshot(); }
 
 		private:
 			using AddStringFn = std::int64_t(RE::ConsoleLog*, const char*);
+			// PrintLine(log, fmt, ...): the hooked call site passes only the line.
+			using EchoFn = std::int32_t(RE::ConsoleLog*, const char*, const char*);
 
 			static std::int64_t OnAddString(RE::ConsoleLog* a_log, const char* a_text)
 			{
@@ -124,10 +133,17 @@ namespace dvb::fallout4
 				return 0;
 			}
 
+			static std::int32_t OnEcho(RE::ConsoleLog* a_log, const char* a_line, const char*)
+			{
+				return s_active.load()->m_echo(a_log, "%s", a_line);
+			}
+
 			tools::BoundedTextLog m_log{ kRecordedBytes };
 			CallHook<AddStringFn> m_print;
 			CallHook<AddStringFn> m_printLine;
+			CallHook<EchoFn>      m_echo;
 			bool                  m_recording = false;
+			bool                  m_echoLiteral = false;
 
 			static inline std::atomic<ConsolePrintHooks*> s_active{ nullptr };
 		};
@@ -201,6 +217,14 @@ namespace dvb::fallout4
 							           json(std::string{});
 						});
 					return result.get<std::string>();
+				},
+				.validateCommand = [a_print](const std::string& a_command) {
+					// The unpatched echo feeds the typed line to printf as a format.
+					if (a_print && !a_print->EchoIsLiteral() &&
+						a_command.find('%') != std::string::npos)
+						throw ToolError(
+							400,
+							"commands containing '%' are refused: the console echo is not patched on this runtime");
 				},
 			};
 		}

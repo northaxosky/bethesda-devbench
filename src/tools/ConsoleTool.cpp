@@ -187,6 +187,8 @@ namespace dvb::tools
 			RequireToolPermission(a_allowCommands, ToolPermission::kConsoleCommands);
 			if (!a_backend.queueCommands)
 				throw ToolError(500, "console command dispatcher unavailable");
+			if (a_backend.validateCommand)
+				a_backend.validateCommand(command);
 
 			std::optional<Capture> capture;
 			{
