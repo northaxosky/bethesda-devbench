@@ -15,4 +15,6 @@ namespace dvb
 
 	std::string MakeInstanceId(std::uint32_t a_pid, std::uint64_t a_creationTime);
 	void        MountInstanceGuard(httplib::Server& a_server, std::string a_instanceId);
+	// Refuses browser-originated traffic: foreign Host, any Origin, non-JSON POST.
+	void        MountBrowserGuard(httplib::Server& a_server, int a_port);
 }

@@ -4,6 +4,9 @@
 
 #include <httplib.h>
 
+#include <algorithm>
+#include <array>
+#include <cctype>
 #include <format>
 
 namespace dvb
@@ -36,6 +39,39 @@ namespace dvb
 						.dump(),
 					"application/json");
 				return httplib::Server::HandlerResponse::Handled;
+			});
+	}
+
+	void MountBrowserGuard(httplib::Server& a_server, int a_port)
+	{
+		const auto port = std::to_string(a_port);
+		a_server.set_pre_routing_handler(
+			[hosts = std::array{ "127.0.0.1:" + port, "localhost:" + port, "[::1]:" + port }](
+				const httplib::Request& a_request, httplib::Response& a_response) {
+				const auto refuse = [&](int a_status, const char* a_message) {
+					a_response.status = a_status;
+					a_response.set_content(json{ { "code", a_status }, { "error", a_message } }.dump(), "application/json");
+					return httplib::Server::HandlerResponse::Handled;
+				};
+
+				// Host is case-insensitive; a rebound DNS name fails this match.
+				auto host = a_request.get_header_value("Host");
+				std::ranges::transform(host, host.begin(), [](unsigned char a_c) { return static_cast<char>(std::tolower(a_c)); });
+				if (std::ranges::find(hosts, host) == hosts.end())
+					return refuse(403, "DevBench only serves loopback Host headers");
+				if (a_request.has_header("Origin"))
+					return refuse(403, "DevBench refuses browser-originated requests");
+				if (a_request.method == "POST")
+				{
+					// A text/plain POST skips CORS preflight, so JSON is required.
+					auto type = a_request.get_header_value("Content-Type");
+					type = type.substr(0, type.find(';'));
+					std::ranges::transform(type, type.begin(), [](unsigned char a_c) { return static_cast<char>(std::tolower(a_c)); });
+					type.erase(type.find_last_not_of(" 	") + 1);
+					if (type != "application/json")
+						return refuse(415, "POST requires Content-Type: application/json");
+				}
+				return httplib::Server::HandlerResponse::Unhandled;
 			});
 	}
 }

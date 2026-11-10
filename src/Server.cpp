@@ -234,6 +234,7 @@ namespace dvb
 		if (auto* http = m_mcp->http())
 		{
 			MountInstanceGuard(*http, Identity().instanceId);
+			MountBrowserGuard(*http, chosen);
 			// httplib's default 5s read timeout applies even to a bodyless POST (no
 			// Content-Length/chunked header) — it waits for a body that will never come
 			// before giving up with an empty 400. Shorten this so that mistake fails fast

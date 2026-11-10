@@ -26,6 +26,7 @@ namespace
 			port = server_.bind_to_any_port("127.0.0.1");
 			if (port < 1)
 				throw std::runtime_error("could not bind the local instance-guard fixture");
+			dvb::MountBrowserGuard(server_, port);
 			worker_ = std::thread([this] { server_.listen_after_bind(); });
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 			while (!server_.is_running() && std::chrono::steady_clock::now() < deadline)
@@ -102,5 +103,27 @@ TEST_CASE("reused PIDs cannot satisfy a previous process instance guard")
 	CHECK(server.calls == 0);
 	auto accepted = client.Post("/api/tool/mutate", { { header, newIdentity } }, "{}", "application/json");
 	CHECK(accepted && accepted->status == 200);
+	CHECK(server.calls == 1);
+}
+
+TEST_CASE("browser-originated requests are refused before tool dispatch")
+{
+	GuardedServer   server("123-0000000000000042");
+	httplib::Client client("127.0.0.1", server.port);
+	client.set_connection_timeout(2);
+	client.set_read_timeout(2);
+
+	auto json = client.Post("/api/tool/mutate", "{}", "application/json; charset=utf-8");
+	CHECK(json && json->status == 200);
+	CHECK(server.calls == 1);
+
+	auto plain = client.Post("/api/tool/mutate", "{}", "text/plain");
+	CHECK(plain && plain->status == 415);
+
+	auto origin = client.Post("/api/tool/mutate", { { "Origin", "https://evil.example" } }, "{}", "application/json");
+	CHECK(origin && origin->status == 403);
+
+	auto rebound = client.Post("/api/tool/mutate", { { "Host", "evil.example:80" } }, "{}", "application/json");
+	CHECK(rebound && rebound->status == 403);
 	CHECK(server.calls == 1);
 }
