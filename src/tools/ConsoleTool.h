@@ -35,7 +35,7 @@ namespace dvb::tools
 		// ExecuteCommand call (the engine may still drain those commands later).
 		std::function<bool(std::vector<std::string>, std::function<void()>)> queueCommands;
 
-		// Return a main-thread snapshot of the native console scrollback buffer.
+		// Return a snapshot of console output.
 		std::function<std::string()> readBuffer;
 
 		// Optional: throws ToolError to refuse a command before anything is queued.

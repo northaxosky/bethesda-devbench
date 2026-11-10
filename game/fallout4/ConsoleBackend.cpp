@@ -18,8 +18,7 @@ namespace dvb::fallout4
 			       a_command.starts_with("DVBCAPEND");
 		}
 
-		// The engine's own buffer is emptied by the console menu and stops at 64 KB,
-		// so printed text is recorded here instead.
+		// The console menu empties the engine buffer, which also caps at 64 KB.
 		constexpr std::size_t kRecordedBytes = 1 << 20;
 
 		struct CallSite
@@ -27,6 +26,7 @@ namespace dvb::fallout4
 			REL::ID                        function;  // contains the call
 			std::array<std::ptrdiff_t, 3>  offset;    // OG, NG, AE; 0 = no site
 			REL::ID                        callee;
+			bool                           chainable;  // may wrap a foreign hook
 		};
 
 		const REL::ID kAddString{ 764, 2248593 };
@@ -35,9 +35,9 @@ namespace dvb::fallout4
 		const REL::ID kExecuteCommand{ 1061864, 2248537 };
 
 		// NG and AE share ids and layout. OG's PrintLine only forwards to Print.
-		const CallSite kPrintToAddString{ kPrint, { 0x5F, 0x9E, 0x9E }, kAddString };
-		const CallSite kPrintLineToAddString{ kPrintLine, { 0, 0xA0, 0xA0 }, kAddString };
-		const CallSite kEchoToPrintLine{ kExecuteCommand, { 0x76, 0x89, 0x89 }, kPrintLine };
+		const CallSite kPrintToAddString{ kPrint, { 0x5F, 0x9E, 0x9E }, kAddString, true };
+		const CallSite kPrintLineToAddString{ kPrintLine, { 0, 0xA0, 0xA0 }, kAddString, true };
+		const CallSite kEchoToPrintLine{ kExecuteCommand, { 0x76, 0x89, 0x89 }, kPrintLine, false };
 
 		enum class SiteState
 		{
@@ -75,7 +75,9 @@ namespace dvb::fallout4
 			CallHook(const CallHook&) = delete;
 			CallHook& operator=(const CallHook&) = delete;
 
-			~CallHook()
+			~CallHook() { Disable(); }
+
+			void Disable()
 			{
 				if (m_hook && m_hook->GetEnabled())
 					m_hook->Disable();
@@ -93,6 +95,11 @@ namespace dvb::fallout4
 					REX::WARN("devbench: {}: call site bytes differ, not patched", a_name);
 					return false;
 				case SiteState::kForeignHook:
+					if (!a_site.chainable)
+					{
+						REX::WARN("devbench: {}: another plugin's hook, not patched", a_name);
+						return false;
+					}
 					REX::INFO("devbench: {}: chaining onto another plugin's hook", a_name);
 					break;
 				case SiteState::kExpected:
@@ -113,14 +120,13 @@ namespace dvb::fallout4
 			std::optional<REL::THook<R(T...)>> m_hook;
 		};
 
-		// Records everything printed to the console and keeps typed lines out of printf.
+		// Records console prints and keeps typed lines out of printf.
 		class ConsolePrintHooks
 		{
 		public:
 			ConsolePrintHooks()
 			{
 				s_active.store(this);
-				// NG/AE print through two entry points; OG's PrintLine forwards to Print.
 				m_recording = m_print.Install("devbench console print", kPrintToAddString, &OnAddString<&ConsolePrintHooks::m_print>);
 				if (kPrintLineToAddString.offset[static_cast<std::size_t>(REX::FModule::GetRuntimeIndex())])
 					m_recording = m_printLine.Install("devbench console printline", kPrintLineToAddString, &OnAddString<&ConsolePrintHooks::m_printLine>) && m_recording;
@@ -129,6 +135,14 @@ namespace dvb::fallout4
 					REX::WARN("{}", "devbench: console print hooks unavailable; reading the engine buffer");
 				if (!m_echoLiteral)
 					REX::WARN("{}", "devbench: console echo not patched; commands containing '%' are refused");
+			}
+
+			~ConsolePrintHooks()
+			{
+				m_echo.Disable();
+				m_printLine.Disable();
+				m_print.Disable();
+				s_active.store(nullptr);
 			}
 
 			ConsolePrintHooks(const ConsolePrintHooks&) = delete;
@@ -261,8 +275,7 @@ namespace dvb::fallout4
 				"devbench console observation",
 				RE::VTABLE::Console[0],
 				1,
-				&OnConsoleCall),
-			m_print()
+				&OnConsoleCall)
 		{
 			Impl* expected = nullptr;
 			if (!s_active.compare_exchange_strong(expected, this))
@@ -274,6 +287,8 @@ namespace dvb::fallout4
 				throw ToolError(
 					503, "could not install the console observation hook");
 			}
+			// Built only once this is the sole instance, so s_active cannot dangle.
+			m_print.emplace();
 		}
 
 		~Impl()
@@ -281,6 +296,7 @@ namespace dvb::fallout4
 			// THookVFT restores the original vtable entry. Its return value is
 			// meaningful, unlike THook::Disable on this CommonLib revision.
 			m_hook.Disable();
+			m_print.reset();
 			Impl* expected = this;
 			s_active.compare_exchange_strong(expected, nullptr);
 		}
@@ -303,7 +319,7 @@ namespace dvb::fallout4
 
 		const ConsolePrintHooks& Print() const
 		{
-			return m_print;
+			return *m_print;
 		}
 
 	private:
@@ -333,7 +349,7 @@ namespace dvb::fallout4
 
 		EventBus& m_events;
 		Hook      m_hook;
-		ConsolePrintHooks m_print;
+		std::optional<ConsolePrintHooks> m_print;
 
 		static inline std::atomic<Impl*> s_active{ nullptr };
 	};

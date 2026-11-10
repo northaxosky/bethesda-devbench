@@ -7,7 +7,7 @@
 
 namespace dvb::tools
 {
-	// Thread-safe rolling text capped at a_capacity bytes; the oldest lines go first.
+	// Thread-safe rolling text; drops the oldest lines past a_capacity.
 	class BoundedTextLog
 	{
 	public:
