@@ -16,48 +16,28 @@ namespace dvb
 		return std::format("{}-{:016X}", a_pid, a_creationTime);
 	}
 
-	void MountInstanceGuard(httplib::Server& a_server, std::string a_instanceId)
-	{
-		a_server.set_pre_request_handler(
-			[instanceId = std::move(a_instanceId)](const httplib::Request& a_request, httplib::Response& a_response) {
-				const bool        guardedRoute = a_request.path.starts_with("/api/") ||
-			                                     a_request.path == "/mcp" || a_request.path.starts_with("/mcp/");
-				const std::string header(kInstanceHeader);
-				if (!guardedRoute || !a_request.has_header(header))
-					return httplib::Server::HandlerResponse::Unhandled;
-				if (a_request.get_header_value_count(header) == 1 &&
-					a_request.get_header_value(header) == instanceId)
-					return httplib::Server::HandlerResponse::Unhandled;
-
-				a_response.status = 409;
-				a_response.set_content(
-					json{
-						{ "code", 409 },
-						{ "error", "DevBench instance changed; this request was not dispatched" },
-						{ "instanceId", instanceId },
-					}
-						.dump(),
-					"application/json");
-				return httplib::Server::HandlerResponse::Handled;
-			});
-	}
-
-	void MountBrowserGuard(httplib::Server& a_server, int a_port)
+	void MountRequestGuard(httplib::Server& a_server, std::string a_instanceId, int a_port)
 	{
 		const auto port = std::to_string(a_port);
-		a_server.set_pre_routing_handler(
-			[hosts = std::array{ "127.0.0.1:" + port, "localhost:" + port, "[::1]:" + port }](
+		// pre_request runs after routing and the body read, so a refusal is not a reset.
+		a_server.set_pre_request_handler(
+			[instanceId = std::move(a_instanceId),
+				hosts = std::array{ "127.0.0.1:" + port, "localhost:" + port, "[::1]:" + port }](
 				const httplib::Request& a_request, httplib::Response& a_response) {
-				const auto refuse = [&](int a_status, const char* a_message) {
+				const auto refuse = [&](int a_status, const char* a_message, json a_extra = json::object()) {
 					a_response.status = a_status;
-					a_response.set_content(json{ { "code", a_status }, { "error", a_message } }.dump(), "application/json");
+					a_extra["code"] = a_status;
+					a_extra["error"] = a_message;
+					a_response.set_content(a_extra.dump(), "application/json");
 					return httplib::Server::HandlerResponse::Handled;
+				};
+				const auto lower = [](std::string a_text) {
+					std::ranges::transform(a_text, a_text.begin(), [](unsigned char a_c) { return static_cast<char>(std::tolower(a_c)); });
+					return a_text;
 				};
 
 				// Host is case-insensitive; a rebound DNS name fails this match.
-				auto host = a_request.get_header_value("Host");
-				std::ranges::transform(host, host.begin(), [](unsigned char a_c) { return static_cast<char>(std::tolower(a_c)); });
-				if (std::ranges::find(hosts, host) == hosts.end())
+				if (std::ranges::find(hosts, lower(a_request.get_header_value("Host"))) == hosts.end())
 					return refuse(403, "DevBench only serves loopback Host headers");
 				if (a_request.has_header("Origin"))
 					return refuse(403, "DevBench refuses browser-originated requests");
@@ -65,13 +45,22 @@ namespace dvb
 				{
 					// A text/plain POST skips CORS preflight, so JSON is required.
 					auto type = a_request.get_header_value("Content-Type");
-					type = type.substr(0, type.find(';'));
-					std::ranges::transform(type, type.begin(), [](unsigned char a_c) { return static_cast<char>(std::tolower(a_c)); });
+					type = lower(type.substr(0, type.find(';')));
 					type.erase(type.find_last_not_of(" 	") + 1);
 					if (type != "application/json")
 						return refuse(415, "POST requires Content-Type: application/json");
 				}
-				return httplib::Server::HandlerResponse::Unhandled;
+
+				const bool        guardedRoute = a_request.path.starts_with("/api/") ||
+				                                 a_request.path == "/mcp" || a_request.path.starts_with("/mcp/");
+				const std::string header(kInstanceHeader);
+				if (!guardedRoute || !a_request.has_header(header))
+					return httplib::Server::HandlerResponse::Unhandled;
+				if (a_request.get_header_value_count(header) == 1 &&
+					a_request.get_header_value(header) == instanceId)
+					return httplib::Server::HandlerResponse::Unhandled;
+				return refuse(409, "DevBench instance changed; this request was not dispatched",
+					json{ { "instanceId", instanceId } });
 			});
 	}
 }

@@ -16,7 +16,6 @@ namespace
 		explicit GuardedServer(std::string a_identity)
 		{
 			server_.new_task_queue = [] { return new httplib::ThreadPool(1); };
-			dvb::MountInstanceGuard(server_, std::move(a_identity));
 			auto handler = [this](const httplib::Request&, httplib::Response& a_response) {
 				++calls;
 				a_response.set_content("{}", "application/json");
@@ -26,7 +25,7 @@ namespace
 			port = server_.bind_to_any_port("127.0.0.1");
 			if (port < 1)
 				throw std::runtime_error("could not bind the local instance-guard fixture");
-			dvb::MountBrowserGuard(server_, port);
+			dvb::MountRequestGuard(server_, std::move(a_identity), port);
 			worker_ = std::thread([this] { server_.listen_after_bind(); });
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 			while (!server_.is_running() && std::chrono::steady_clock::now() < deadline)

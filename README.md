@@ -79,7 +79,7 @@ EcoQoS. `inspect` `kind=state` reports `window`: `foreground` (live),
 Use the companion for restart-surviving MCP, or connect directly to
 `http://127.0.0.1:<port>/mcp` (defaults: FO4 8930, Skyrim 8920, VR 8921).
 REST exposes `/api/health`, `/api/tools`,
-`/api/events`, `/api/await/events`, `/api/await/frame`, and `POST /api/tool/{name}`. The selected port and instance
+`/api/events`, `/api/await/events`, `/api/await/frame`, and `POST /api/tool/{name}` (JSON body, `Content-Type: application/json`). The selected port and instance
 identity are mirrored at `%LOCALAPPDATA%\devbench\<fo4|se|vr>\runtime.json`.
 
 ## Safety
