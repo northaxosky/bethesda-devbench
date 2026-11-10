@@ -39,20 +39,34 @@ namespace dvb::fallout4
 		const CallSite kPrintLineToAddString{ kPrintLine, { 0, 0xA0, 0xA0 }, kAddString };
 		const CallSite kEchoToPrintLine{ kExecuteCommand, { 0x76, 0x89, 0x89 }, kPrintLine };
 
-		bool CallsTarget(std::uintptr_t a_site, std::uintptr_t a_target)
+		enum class SiteState
+		{
+			kExpected,
+			kForeignHook,
+			kChanged,
+		};
+
+		// A call into a stub outside the game's code is another plugin's hook.
+		SiteState InspectCallSite(std::uintptr_t a_site, std::uintptr_t a_target)
 		{
 			const auto* bytes = reinterpret_cast<const std::uint8_t*>(a_site);
 			if (bytes[0] != 0xE8)
-				return false;
+				return SiteState::kChanged;
 			std::int32_t displacement;
 			std::memcpy(&displacement, bytes + 1, sizeof(displacement));
-			return a_site + 5 + displacement == a_target;
+			const auto destination = a_site + 5 + displacement;
+			if (destination == a_target)
+				return SiteState::kExpected;
+			const auto text = REX::FModule::GetExecutingModule().GetSection(".text");
+			const bool inGame = destination >= text.GetAddress() &&
+			                    destination < text.GetAddress() + text.GetSize();
+			return inGame ? SiteState::kChanged : SiteState::kForeignHook;
 		}
 
 		template <class>
 		class CallHook;
 
-		// Patches a call site only while it still calls the expected function.
+		// Patches a call site that calls the expected function or a hook on it.
 		template <class R, class... T>
 		class CallHook<R(T...)>
 		{
@@ -73,10 +87,16 @@ namespace dvb::fallout4
 				if (!offset)
 					return false;
 				const auto address = a_site.function.address() + offset;
-				if (!CallsTarget(address, a_site.callee.address()))
+				switch (InspectCallSite(address, a_site.callee.address()))
 				{
+				case SiteState::kChanged:
 					REX::WARN("devbench: {}: call site bytes differ, not patched", a_name);
 					return false;
+				case SiteState::kForeignHook:
+					REX::INFO("devbench: {}: chaining onto another plugin's hook", a_name);
+					break;
+				case SiteState::kExpected:
+					break;
 				}
 				m_hook.emplace(a_name, a_site.function, offset, a_function);
 				if (!m_hook->Init() || !m_hook->Enable())
@@ -101,9 +121,9 @@ namespace dvb::fallout4
 			{
 				s_active.store(this);
 				// NG/AE print through two entry points; OG's PrintLine forwards to Print.
-				m_recording = m_print.Install("devbench console print", kPrintToAddString, &OnAddString);
+				m_recording = m_print.Install("devbench console print", kPrintToAddString, &OnAddString<&ConsolePrintHooks::m_print>);
 				if (kPrintLineToAddString.offset[static_cast<std::size_t>(REX::FModule::GetRuntimeIndex())])
-					m_recording = m_printLine.Install("devbench console printline", kPrintLineToAddString, &OnAddString) && m_recording;
+					m_recording = m_printLine.Install("devbench console printline", kPrintLineToAddString, &OnAddString<&ConsolePrintHooks::m_printLine>) && m_recording;
 				m_echoLiteral = m_echo.Install("devbench console echo", kEchoToPrintLine, &OnEcho);
 				if (!m_recording)
 					REX::WARN("{}", "devbench: console print hooks unavailable; reading the engine buffer");
@@ -125,12 +145,14 @@ namespace dvb::fallout4
 			// PrintLine(log, fmt, ...): the hooked call site passes only the line.
 			using EchoFn = std::int32_t(RE::ConsoleLog*, const char*, const char*);
 
+			// Each site forwards to its own original, which may be another hook.
+			template <CallHook<AddStringFn> ConsolePrintHooks::*Site>
 			static std::int64_t OnAddString(RE::ConsoleLog* a_log, const char* a_text)
 			{
-				if (auto* active = s_active.load(); active && a_text)
+				auto* active = s_active.load();
+				if (a_text)
 					active->m_log.Append(a_text);
-				a_log->AddString(a_text);
-				return 0;
+				return (active->*Site)(a_log, a_text);
 			}
 
 			static std::int32_t OnEcho(RE::ConsoleLog* a_log, const char* a_line, const char*)
