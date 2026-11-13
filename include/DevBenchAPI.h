@@ -88,11 +88,7 @@ namespace DevBenchAPI
 		virtual bool RegisterToolExtension(const char* a_baseTool, const char* a_key,
 			const char* a_descriptorJson, ToolFn a_handler, void* a_ctx) = 0;
 
-		// Set the game's global time scale (0.1..3.0), restored after a_leaseMs (0 = 60000).
-		// Non-blocking, any thread; applied on a later main-thread frame. Returns false when the
-		// scale is out of range or a recording/capture would be made incomparable. a_owner names
-		// the lease (nullptr = anonymous). ABI: call only when GetBuildNumber() >= 12000
-		// (kTimeScaleCompatibility).
+		// Not implemented by this host yet; always returns false. ABI floor 12000.
 		virtual bool SetTimeScale(float a_scale, std::uint32_t a_leaseMs, const char* a_owner) = 0;
 
 		// The global time multiplier the game is running at now; 1.0 when nothing changed it.
