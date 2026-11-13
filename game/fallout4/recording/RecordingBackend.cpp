@@ -3,6 +3,7 @@
 #include "GameState.h"
 #include "MainThread.h"
 #include "game/fallout4/Lifecycle.h"
+#include "game/fallout4/LivePlayer.h"
 #include "game/fallout4/inspection/Form.h"
 
 #include <numbers>
@@ -31,12 +32,9 @@ namespace dvb::fallout4
 		json Snapshot()
 		{
 			return MainThread::RunAndWait([]() -> json {
-				const auto lifecycle = Lifecycle::GetSnapshot();
-				auto*      player = RE::PlayerCharacter::GetSingleton();
-				if (!lifecycle.gameDataReady || lifecycle.inMainMenu ||
-					lifecycle.inLoadingMenu || lifecycle.loadInProgress ||
-					lifecycle.postLoadSucceeded == false || !player ||
-					!player->Get3D())
+				const auto live = ReadLivePlayer();
+				auto*      player = live.player;
+				if (!live.readiness.loaded)
 					return json{
 						{ "playerLoaded", false },
 						{ "frame", game::CurrentFrame() },

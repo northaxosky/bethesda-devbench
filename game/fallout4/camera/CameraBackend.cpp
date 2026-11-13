@@ -1,6 +1,7 @@
 #include "CameraBackend.h"
 
 #include "MainThread.h"
+#include "game/fallout4/LivePlayer.h"
 #include "game/fallout4/Runtime.h"
 #include "tools/camera/MutationDispatch.h"
 
@@ -166,9 +167,9 @@ namespace dvb::fallout4
 
 		void RequireLoadedScene(const RE::PlayerCamera& a_camera)
 		{
-			const auto player = RE::PlayerCharacter::GetSingleton();
-			if (!a_camera.currentState || !a_camera.cameraRoot || !player ||
-				!player->Get3D() || !player->GetParentCell() ||
+			const auto live = ReadLivePlayer();
+			if (!live.readiness.loaded || !live.player->GetParentCell() ||
+				!a_camera.currentState || !a_camera.cameraRoot ||
 				!RE::PlayerControls::GetSingleton())
 				throw ToolError(422,
 					"free camera requires a loaded scene, a registered camera state, and player controls");
