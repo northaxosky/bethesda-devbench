@@ -2,6 +2,7 @@
 
 #include "Compatibility.h"
 #include "GameState.h"
+#include "Json.h"
 #include "McpAdapter.h"
 #include "RestAdapter.h"
 #include "RuntimePaths.h"
@@ -44,12 +45,6 @@ namespace
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 		return true;
-	}
-
-	std::string Utf8Path(const std::filesystem::path& a_path)
-	{
-		const auto bytes = a_path.u8string();
-		return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
 	}
 
 	struct ProcessIdentity
@@ -110,7 +105,7 @@ namespace
 		}
 		catch (const std::system_error& a_error)
 		{
-			logs::error("devbench: could not publish {}: {}", Utf8Path(a_path), a_error.what());
+			logs::error("devbench: could not publish {}: {}", dvb::Utf8(a_path), a_error.what());
 		}
 	}
 
@@ -366,7 +361,7 @@ namespace dvb
 
 	std::string ExecutableName()
 	{
-		return Utf8Path(Identity().executable.filename());
+		return dvb::Utf8(Identity().executable.filename());
 	}
 
 	json InstanceIdentity()
@@ -384,9 +379,9 @@ namespace dvb
 			{ "extender", profile.extenderName },
 			{ "exe", ExecutableName() },
 			{ "instanceId", identity.instanceId },
-			{ "exePath", Utf8Path(identity.executable) },
+			{ "exePath", dvb::Utf8(identity.executable) },
 			{ "runtime", identity.runtime },
-			{ "dllPath", Utf8Path(identity.plugin) },
+			{ "dllPath", dvb::Utf8(identity.plugin) },
 			{ "compatibility", CompatibilityMetadata() },
 		};
 	}
@@ -400,7 +395,7 @@ namespace dvb
 		const auto        helper = directory / L"platform" / L"windows-session.ps1";
 		const auto        shim = directory / L"platform" / L"LaunchShim.cs";
 		const auto        launcher = directory / L"platform" / L"devbench-launch.exe";
-		const std::string exePath = Utf8Path(executable);
+		const std::string exePath = dvb::Utf8(executable);
 		const std::string name = "devbench-" + game;
 		std::error_code   ec;
 		const bool        available = std::filesystem::is_regular_file(executable, ec);

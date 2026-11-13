@@ -2,6 +2,7 @@
 
 #include "Config.h"
 #include "ExtensionArgs.h"
+#include "io/PathText.h"
 #include "Ssim.h"
 #include "ToolExtensions.h"
 
@@ -63,12 +64,6 @@ namespace dvb::tools::capture
 			std::optional<json> eventGap;
 		};
 
-		std::string JsonPath(const fs::path& a_path)
-		{
-			const auto bytes = a_path.generic_u8string();
-			return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
-		}
-
 		std::string LowerAscii(std::string a_value)
 		{
 			std::ranges::transform(a_value, a_value.begin(), [](unsigned char a_ch) {
@@ -84,7 +79,7 @@ namespace dvb::tools::capture
 			auto            absolute = fs::absolute(a_path, ec);
 			if (ec)
 				absolute = a_path;
-			return LowerAscii(JsonPath(absolute.lexically_normal()));
+			return LowerAscii(Utf8Generic(absolute.lexically_normal()));
 		}
 
 		void RequireObject(const json& a_args, std::string_view a_operation)
@@ -303,38 +298,38 @@ namespace dvb::tools::capture
 				if (ec)
 					throw ToolError(500, std::format(
 											 "failed to inspect screenshot directory '{}': {}",
-											 JsonPath(directory), ec.message()));
+											 Utf8Generic(directory), ec.message()));
 				if (!exists)
 				{
 					if (a_requireDirectory)
 						throw ToolError(404, std::format(
 												 "screenshot directory '{}' does not exist",
-												 JsonPath(directory)));
+												 Utf8Generic(directory)));
 					continue;
 				}
 				if (!fs::is_directory(directory, ec) || ec)
 					throw ToolError(400, std::format(
 											 "screenshot path '{}' is not a readable directory",
-											 JsonPath(directory)));
+											 Utf8Generic(directory)));
 
 				fs::directory_iterator iterator(directory, ec);
 				if (ec)
 					throw ToolError(500, std::format(
 											 "failed to enumerate screenshot directory '{}': {}",
-											 JsonPath(directory), ec.message()));
+											 Utf8Generic(directory), ec.message()));
 				for (const fs::directory_iterator end; iterator != end; iterator.increment(ec))
 				{
 					if (ec)
 						throw ToolError(500, std::format(
 												 "failed while enumerating screenshot directory '{}': {}",
-												 JsonPath(directory), ec.message()));
+												 Utf8Generic(directory), ec.message()));
 					const auto& entry = *iterator;
 					if (!entry.is_regular_file(ec))
 					{
 						if (ec)
 							throw ToolError(500, std::format(
 													 "failed to inspect screenshot entry '{}': {}",
-													 JsonPath(entry.path()), ec.message()));
+													 Utf8Generic(entry.path()), ec.message()));
 						continue;
 					}
 					if (!ImageExtension(entry.path()))
@@ -343,12 +338,12 @@ namespace dvb::tools::capture
 					if (ec)
 						throw ToolError(500, std::format(
 												 "failed to read screenshot size '{}': {}",
-												 JsonPath(entry.path()), ec.message()));
+												 Utf8Generic(entry.path()), ec.message()));
 					const auto modified = entry.last_write_time(ec);
 					if (ec)
 						throw ToolError(500, std::format(
 												 "failed to read screenshot time '{}': {}",
-												 JsonPath(entry.path()), ec.message()));
+												 Utf8Generic(entry.path()), ec.message()));
 					out.push_back({ entry.path(), size, modified });
 					if (out.size() > kMaxScannedImages)
 						throw ToolError(413, std::format(
@@ -358,7 +353,7 @@ namespace dvb::tools::capture
 				if (ec)
 					throw ToolError(500, std::format(
 											 "failed while enumerating screenshot directory '{}': {}",
-											 JsonPath(directory), ec.message()));
+											 Utf8Generic(directory), ec.message()));
 			}
 			return out;
 		}
@@ -381,13 +376,13 @@ namespace dvb::tools::capture
 			if (!fs::exists(a_path, ec))
 			{
 				if (ec)
-					result.error = std::format("failed to inspect capture '{}': {}", JsonPath(a_path), ec.message());
+					result.error = std::format("failed to inspect capture '{}': {}", Utf8Generic(a_path), ec.message());
 				return result;
 			}
 			const auto size = fs::file_size(a_path, ec);
 			if (ec)
 			{
-				result.error = std::format("failed to read capture size '{}': {}", JsonPath(a_path), ec.message());
+				result.error = std::format("failed to read capture size '{}': {}", Utf8Generic(a_path), ec.message());
 				return result;
 			}
 			if (size == 0)
@@ -396,13 +391,13 @@ namespace dvb::tools::capture
 			{
 				result.invalid = true;
 				result.error = std::format(
-					"capture '{}' exceeds the {} byte budget", JsonPath(a_path), kMaxCaptureBytes);
+					"capture '{}' exceeds the {} byte budget", Utf8Generic(a_path), kMaxCaptureBytes);
 				return result;
 			}
 			const auto modified = fs::last_write_time(a_path, ec);
 			if (ec)
 			{
-				result.error = std::format("failed to read capture time '{}': {}", JsonPath(a_path), ec.message());
+				result.error = std::format("failed to read capture time '{}': {}", Utf8Generic(a_path), ec.message());
 				return result;
 			}
 			if (!ExclusiveReadable(a_path))
@@ -425,7 +420,7 @@ namespace dvb::tools::capture
 				result.invalid = true;
 				result.error = std::format(
 					"capture '{}' is not a complete decodable PNG or BMP image",
-					JsonPath(a_path));
+					Utf8Generic(a_path));
 				return result;
 			}
 			result.complete = true;
@@ -656,7 +651,7 @@ namespace dvb::tools::capture
 				throw ToolError(422, invalidError);
 			std::string scanned;
 			for (const auto& root : roots)
-				scanned += (scanned.empty() ? "" : ", ") + JsonPath(root);
+				scanned += (scanned.empty() ? "" : ", ") + Utf8Generic(root);
 			throw ToolError(504, std::format(
 									 "no unambiguous complete native screenshot appeared within {}ms (scanned: {})",
 									 a_timeout.count(), scanned));
@@ -668,21 +663,21 @@ namespace dvb::tools::capture
 			if (fs::exists(a_image, ec))
 				throw ToolError(409, std::format(
 										 "capture output '{}' already exists; existing artifacts are never overwritten",
-										 JsonPath(a_image)));
+										 Utf8Generic(a_image)));
 			if (ec)
 				throw ToolError(500, std::format(
 										 "failed to inspect capture output '{}': {}",
-										 JsonPath(a_image), ec.message()));
+										 Utf8Generic(a_image), ec.message()));
 			auto sidecar = a_image;
 			sidecar.replace_extension(".json");
 			if (fs::exists(sidecar, ec))
 				throw ToolError(409, std::format(
 										 "capture sidecar '{}' already exists; existing artifacts are never overwritten",
-										 JsonPath(sidecar)));
+										 Utf8Generic(sidecar)));
 			if (ec)
 				throw ToolError(500, std::format(
 										 "failed to inspect capture sidecar '{}': {}",
-										 JsonPath(sidecar), ec.message()));
+										 Utf8Generic(sidecar), ec.message()));
 		}
 
 		void CreateDirectory(const fs::path& a_directory)
@@ -692,12 +687,12 @@ namespace dvb::tools::capture
 			if (ec)
 				throw ToolError(500, std::format(
 										 "failed to create capture directory '{}': {}",
-										 JsonPath(a_directory), ec.message()));
+										 Utf8Generic(a_directory), ec.message()));
 		}
 
 		void WriteSidecar(const fs::path& a_imagePath, const json& a_result, std::uint64_t a_sequence)
 		{
-			const auto body = a_result.dump(2) + '\n';
+			const auto body = Dump(a_result, 2) + '\n';
 			if (body.size() > kMaxSidecarBytes)
 				throw ToolError(413, std::format(
 										 "capture metadata exceeds the {} byte sidecar budget",
@@ -708,11 +703,11 @@ namespace dvb::tools::capture
 			if (fs::exists(sidecar, ec))
 				throw ToolError(409, std::format(
 										 "capture sidecar '{}' already exists; existing metadata is never overwritten",
-										 JsonPath(sidecar)));
+										 Utf8Generic(sidecar)));
 			if (ec)
 				throw ToolError(500, std::format(
 										 "failed to inspect capture sidecar '{}': {}",
-										 JsonPath(sidecar), ec.message()));
+										 Utf8Generic(sidecar), ec.message()));
 			CreateDirectory(sidecar.parent_path());
 			const auto temporary = fs::path(
 				sidecar.wstring() + L".dvb-" + std::to_wstring(a_sequence) + L".tmp");
@@ -737,12 +732,12 @@ namespace dvb::tools::capture
 			{
 				throw ToolError(500, std::format(
 										 "failed to write capture sidecar '{}': {}",
-										 JsonPath(sidecar), error.what()));
+										 Utf8Generic(sidecar), error.what()));
 			}
 			if (!::MoveFileExW(temporary.c_str(), sidecar.c_str(), MOVEFILE_WRITE_THROUGH))
 				throw ToolError(500, std::format(
 										 "failed to publish capture sidecar '{}': {}",
-										 JsonPath(sidecar),
+										 Utf8Generic(sidecar),
 										 std::system_category().message(static_cast<int>(::GetLastError()))));
 			remove.path.clear();
 		}
@@ -767,7 +762,7 @@ namespace dvb::tools::capture
 			{
 				throw ToolError(500, std::format(
 										 "failed to resolve physical capture path '{}': {}",
-										 JsonPath(a_path), error.what()));
+										 Utf8Generic(a_path), error.what()));
 			}
 		}
 
@@ -867,8 +862,8 @@ namespace dvb::tools::capture
 				{ "ok", true },
 				{ "provider", std::move(a_provider) },
 				{ "kind", "screenshot" },
-				{ "path", JsonPath(a_physicalPath) },
-				{ "file", a_physicalPath.filename().string() },
+				{ "path", Utf8Generic(a_physicalPath) },
+				{ "file", Utf8(a_physicalPath.filename()) },
 				{ "bytes", a_bytes },
 				{ "width", a_width },
 				{ "height", a_height },
@@ -891,7 +886,7 @@ namespace dvb::tools::capture
 		{
 			a_events.Publish("capture.abandoned", json{
 													  { "requestId", a_requestId },
-													  { "path", a_path.empty() ? json(nullptr) : json(JsonPath(a_path)) },
+													  { "path", a_path.empty() ? json(nullptr) : json(Utf8Generic(a_path)) },
 													  { "checkpointId", a_args.value("checkpointId", std::string{}) },
 													  { "runId", a_args.value("runId", json(nullptr)) },
 													  { "reason", a_reason },
@@ -945,7 +940,7 @@ namespace dvb::tools::capture
 			EnsureNewArtifactPaths(outputPath);
 
 			json providerArgs = ExtensionArgs(a_args, a_context);
-			providerArgs["outputPath"] = JsonPath(outputPath);
+			providerArgs["outputPath"] = Utf8Generic(outputPath);
 			providerArgs["requestId"] = requestId;
 			const auto cursor = events.HeadSeq();
 
@@ -1072,7 +1067,7 @@ namespace dvb::tools::capture
 			if (ec)
 				throw ToolError(500, std::format(
 										 "native screenshot relocation from '{}' to '{}' failed without copying: {}",
-										 JsonPath(native.path), JsonPath(destination), ec.message()));
+										 Utf8Generic(native.path), Utf8Generic(destination), ec.message()));
 
 			const auto          physicalPath = ResolvePhysical(backend, destination);
 			ArtifactObservation observation;
@@ -1231,8 +1226,8 @@ namespace dvb::tools::capture
 				continue;
 			const auto modified = std::chrono::clock_cast<std::chrono::system_clock>(file.modified);
 			screenshots.push_back(json{
-				{ "file", physical.filename().string() },
-				{ "path", JsonPath(physical) },
+				{ "file", Utf8(physical.filename()) },
+				{ "path", Utf8Generic(physical) },
 				{ "bytes", file.size },
 				{ "mtimeEpoch", duration_cast<seconds>(modified.time_since_epoch()).count() },
 			});
@@ -1242,13 +1237,13 @@ namespace dvb::tools::capture
 		{
 			std::error_code ec;
 			if (fs::exists(directory, ec))
-				roots.push_back(JsonPath(ResolvePhysical(state_->backend, directory)));
+				roots.push_back(Utf8Generic(ResolvePhysical(state_->backend, directory)));
 			else if (ec)
 				throw ToolError(500, std::format(
 										 "failed to inspect screenshot directory '{}': {}",
-										 JsonPath(directory), ec.message()));
+										 Utf8Generic(directory), ec.message()));
 			else
-				roots.push_back(JsonPath(fs::absolute(directory).lexically_normal()));
+				roots.push_back(Utf8Generic(fs::absolute(directory).lexically_normal()));
 		}
 		return json{
 			{ "dirs", std::move(roots) },

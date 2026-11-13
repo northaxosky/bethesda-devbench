@@ -1,6 +1,7 @@
 #include "tools/recording/RecordingTool.h"
 
 #include "Config.h"
+#include "io/PathText.h"
 #include "io/WindowsPaths.h"
 #include "tools/GameTool.h"
 #include "tools/ToolPermissions.h"
@@ -1214,7 +1215,7 @@ namespace dvb::tools::recording
 				{ "action", "stop" },
 				{ "file", file },
 				{ "path",
-					io::PhysicalFilePath(store.Root() / file).generic_string() },
+					Utf8Generic(io::PhysicalFilePath(store.Root() / file)) },
 				{ "sampleCount", localSamples.size() },
 				{ "checkpointCount", localCheckpoints.size() },
 				{ "activityCounts", ActivityCounts(localActivity) },

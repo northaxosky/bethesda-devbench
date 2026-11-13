@@ -65,12 +65,6 @@ namespace dvb::fallout4
 			std::optional<DispatchResult> result;
 		};
 
-		std::string Utf8String(const fs::path& a_path)
-		{
-			const auto value = a_path.u8string();
-			return { reinterpret_cast<const char*>(value.data()), value.size() };
-		}
-
 		std::string ResolveSaveDirectory()
 		{
 			const auto value = MainThread::RunAndWait([]() -> json {
@@ -97,9 +91,9 @@ namespace dvb::fallout4
 			if (ec)
 				throw ToolError(503, std::format(
 										 "could not enumerate Fallout 4 save directory '{}': {}",
-										 Utf8String(directory), ec.message()));
+										 Utf8(directory), ec.message()));
 
-			tools::GameSaveList          out{ .directory = Utf8String(directory) };
+			tools::GameSaveList          out{ .directory = Utf8(directory) };
 			const fs::directory_iterator end;
 			for (; it != end;)
 			{
@@ -108,10 +102,10 @@ namespace dvb::fallout4
 				if (ec)
 					throw ToolError(503, std::format(
 											 "could not inspect save directory entry '{}': {}",
-											 Utf8String(entry.path()), ec.message()));
+											 Utf8(entry.path()), ec.message()));
 				if (regular)
 				{
-					auto extension = Utf8String(entry.path().extension());
+					auto extension = Utf8(entry.path().extension());
 					std::ranges::transform(extension, extension.begin(), [](unsigned char a_ch) {
 						return static_cast<char>(a_ch >= 'A' && a_ch <= 'Z' ? a_ch + ('a' - 'A') : a_ch);
 					});
@@ -130,10 +124,10 @@ namespace dvb::fallout4
 						{
 							throw ToolError(503, std::format(
 													 "could not read save modification time '{}': {}",
-													 Utf8String(entry.path()), ec.message()));
+													 Utf8(entry.path()), ec.message()));
 						}
 						out.saves.push_back({
-							.name = Utf8String(entry.path().stem()),
+							.name = Utf8(entry.path().stem()),
 							.modifiedUnix = modifiedUnix,
 						});
 					}
@@ -142,7 +136,7 @@ namespace dvb::fallout4
 				if (ec)
 					throw ToolError(503, std::format(
 											 "could not continue enumerating Fallout 4 save directory '{}': {}",
-											 Utf8String(directory), ec.message()));
+											 Utf8(directory), ec.message()));
 			}
 			return out;
 		}
@@ -186,7 +180,7 @@ namespace dvb::fallout4
 						normalized = a_path;
 					normalized = normalized.lexically_normal();
 				}
-				auto value = Utf8String(normalized);
+				auto value = Utf8(normalized);
 				std::ranges::transform(value, value.begin(), [](unsigned char a_ch) {
 					return static_cast<char>(
 						a_ch >= 'A' && a_ch <= 'Z' ? a_ch + ('a' - 'A') : a_ch);
@@ -206,8 +200,8 @@ namespace dvb::fallout4
 				!SameDirectory(nativeDirectory, fs::path(*a_requestedDirectory)))
 				throw ToolError(409, std::format(
 										 "directory '{}' is read-only selection and does not match Fallout 4's native save directory '{}'",
-										 *a_requestedDirectory, Utf8String(nativeDirectory)));
-			return Utf8String(nativeDirectory);
+										 *a_requestedDirectory, Utf8(nativeDirectory)));
+			return Utf8(nativeDirectory);
 		}
 
 		json OperationJson(const tools::GameOperationSnapshot& a_operation)
@@ -419,7 +413,7 @@ namespace dvb::fallout4
 					.errorCode = 409,
 					.error = std::format(
 						"directory '{}' is read-only selection and does not match Fallout 4's native save directory '{}'",
-						*a_request.directory, Utf8String(nativeDirectory)),
+						*a_request.directory, Utf8(nativeDirectory)),
 				};
 
 			std::error_code ec;
@@ -432,7 +426,7 @@ namespace dvb::fallout4
 					.errorCode = 503,
 					.error = std::format(
 						"could not inspect save path '{}': {}",
-						Utf8String(savePath), ec.message()),
+						Utf8(savePath), ec.message()),
 				};
 			if (a_request.kind == tools::GameOperationKind::kSave)
 			{
@@ -445,7 +439,7 @@ namespace dvb::fallout4
 						.errorCode = 503,
 						.error = std::format(
 							"could not inspect save sidecar path '{}': {}",
-							Utf8String(sidecarPath), ec.message()),
+							Utf8(sidecarPath), ec.message()),
 					};
 				if (exists || sidecarExists)
 					return {

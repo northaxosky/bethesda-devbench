@@ -1426,7 +1426,7 @@ namespace dvb::tools::scenario
 							Clock::now() - stepStarted)
 							.count();
 
-					const std::size_t stepBytes = outcome.transcript.dump().size();
+					const std::size_t stepBytes = Dump(outcome.transcript).size();
 					if (stepBytes > config.maxTranscriptBytes - std::min(
 																	transcriptBytes, config.maxTranscriptBytes))
 					{
@@ -1442,7 +1442,7 @@ namespace dvb::tools::scenario
 						outcome.failed = true;
 						aborted = true;
 					}
-					transcriptBytes += outcome.transcript.dump().size();
+					transcriptBytes += Dump(outcome.transcript).size();
 					results.push_back(outcome.transcript);
 
 					json completedEvent =
@@ -2412,7 +2412,7 @@ namespace dvb::tools::scenario
 							"waitUntil timed out after {} ms; last observation: {}",
 							a_step.timeout.count(),
 							last.error.empty() ?
-								(last.available ? last.actual.dump() : "<missing>") :
+								(last.available ? Dump(last.actual) : "<missing>") :
 								last.error);
 					outcome.failed = true;
 					return outcome;

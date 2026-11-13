@@ -1,5 +1,6 @@
 #include "tools/recording/RecordingModel.h"
 
+#include "io/PathText.h"
 #include "io/WindowsPaths.h"
 
 #include <algorithm>
@@ -18,12 +19,6 @@ namespace dvb::tools::recording
 	namespace
 	{
 		namespace fs = std::filesystem;
-
-		std::string PathString(const fs::path& a_path)
-		{
-			const auto value = a_path.generic_u8string();
-			return { reinterpret_cast<const char*>(value.data()), value.size() };
-		}
 
 		std::string LowerAscii(std::string a_value)
 		{
@@ -280,7 +275,7 @@ namespace dvb::tools::recording
 					500,
 					std::format(
 						"could not atomically publish recording '{}' (Win32 error {})",
-						PathString(a_destination),
+						Utf8Generic(a_destination),
 						GetLastError()));
 #else
 			std::error_code error;
@@ -289,14 +284,14 @@ namespace dvb::tools::recording
 					409,
 					std::format(
 						"recording '{}' already exists",
-						a_destination.filename().string()));
+						Utf8(a_destination.filename())));
 			fs::rename(a_temporary, a_destination, error);
 			if (error)
 				throw ToolError(
 					500,
 					std::format(
 						"could not atomically publish recording '{}': {}",
-						PathString(a_destination), error.message()));
+						Utf8Generic(a_destination), error.message()));
 #endif
 		}
 	}
@@ -440,14 +435,14 @@ namespace dvb::tools::recording
 	std::string SerializeRecording(const json& a_document)
 	{
 		std::string output =
-			"{\n\"meta\": " + a_document.value("meta", json::object()).dump(2);
+			"{\n\"meta\": " + Dump(a_document.value("meta", json::object()), 2);
 		const auto AppendCompactArray = [&](std::string_view a_key) {
 			const auto value = a_document.find(a_key);
 			if (value == a_document.end() || !value->is_array())
 				return;
-			output += ",\n" + json(a_key).dump() + ": [\n";
+			output += ",\n" + Dump(json(a_key)) + ": [\n";
 			for (std::size_t index = 0; index < value->size(); ++index)
-				output += (*value)[index].dump() +
+				output += Dump((*value)[index]) +
 				          (index + 1 < value->size() ? ",\n" : "\n");
 			output += "]";
 		};
@@ -457,7 +452,7 @@ namespace dvb::tools::recording
 			if (key == "meta" || key == "steps" || key == "activityEvents" ||
 				key == "samples" || key == "trackingSamples")
 				continue;
-			output += ",\n" + json(key).dump() + ": " + value.dump(2);
+			output += ",\n" + Dump(json(key)) + ": " + Dump(value, 2);
 		}
 		AppendCompactArray("samples");
 		AppendCompactArray("trackingSamples");
@@ -542,7 +537,7 @@ namespace dvb::tools::recording
 		std::error_code error;
 		if (!fs::exists(root_, error))
 			return json{
-				{ "dir", PathString(root_) },
+				{ "dir", Utf8Generic(root_) },
 				{ "count", 0 },
 				{ "recordings", std::move(entries) },
 			};
@@ -552,7 +547,7 @@ namespace dvb::tools::recording
 				500,
 				std::format(
 					"could not enumerate recordings root '{}': {}",
-					PathString(root_), error.message()));
+					Utf8Generic(root_), error.message()));
 		for (const fs::directory_iterator end;
 			iterator != end;
 			iterator.increment(error))
@@ -568,7 +563,7 @@ namespace dvb::tools::recording
 				!fs::is_regular_file(status) ||
 				LowerAscii(iterator->path().extension().string()) != ".json")
 				continue;
-			const auto file = iterator->path().filename().string();
+			const auto file = Utf8(iterator->path().filename());
 			try
 			{
 				entries.push_back(
@@ -601,7 +596,7 @@ namespace dvb::tools::recording
 			       a_right.value("file", std::string{});
 		});
 		return json{
-			{ "dir", PathString(io::PhysicalFilePath(root_)) },
+			{ "dir", Utf8Generic(io::PhysicalFilePath(root_)) },
 			{ "count", entries.size() },
 			{ "recordings", std::move(entries) },
 		};
@@ -627,7 +622,7 @@ namespace dvb::tools::recording
 					500,
 					std::format(
 						"could not inspect recording destination '{}': {}",
-						PathString(path), error.message()));
+						Utf8Generic(path), error.message()));
 			WriteAtomic(path, a_document, false);
 			return file;
 		}
@@ -691,18 +686,18 @@ namespace dvb::tools::recording
 				500,
 				std::format(
 					"could not create recordings root '{}': {}",
-					PathString(root_), error.message()));
+					Utf8Generic(root_), error.message()));
 		if (!a_replace && fs::exists(a_path, error))
 			throw ToolError(
 				409,
 				std::format(
 					"recording '{}' already exists",
-					a_path.filename().string()));
+					Utf8(a_path.filename())));
 
 		static std::atomic_uint64_t temporarySequence{ 0 };
 		const auto temporary = root_ / std::format(
 			".{}.tmp.{}",
-			a_path.filename().string(),
+			Utf8(a_path.filename()),
 			++temporarySequence);
 		try
 		{
@@ -713,7 +708,7 @@ namespace dvb::tools::recording
 					500,
 					std::format(
 						"could not create temporary recording '{}'",
-						PathString(temporary)));
+						Utf8Generic(temporary)));
 			output.write(
 				serialized.data(),
 				static_cast<std::streamsize>(serialized.size()));
@@ -723,7 +718,7 @@ namespace dvb::tools::recording
 					500,
 					std::format(
 						"could not flush temporary recording '{}'",
-						PathString(temporary)));
+						Utf8Generic(temporary)));
 			output.close();
 			PublishFile(temporary, a_path, a_replace);
 			const auto bytes = fs::file_size(a_path, error);
@@ -732,7 +727,7 @@ namespace dvb::tools::recording
 					500,
 					std::format(
 						"recording '{}' failed post-publication verification",
-						a_path.filename().string()));
+						Utf8(a_path.filename())));
 		}
 		catch (...)
 		{

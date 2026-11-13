@@ -2,6 +2,7 @@
 
 #include "ConfigPolicy.h"
 #include "Log.h"
+#include "io/PathText.h"
 
 #include <Windows.h>
 
@@ -54,10 +55,10 @@ namespace dvb
 	{
 		Config config;
 		config.port = a_profile.defaultPort;
-		config.captureDir = a_profile.captureDirectory.generic_string();
+		config.captureDir = Utf8Generic(a_profile.captureDirectory);
 		config.captureScanDirs.clear();
 		for (const auto& path : a_profile.captureScanDirectories)
-			config.captureScanDirs.push_back(path.generic_string());
+			config.captureScanDirs.push_back(Utf8Generic(path));
 		return config;
 	}
 

@@ -28,7 +28,7 @@ namespace dvb
 					a_response.status = a_status;
 					a_extra["code"] = a_status;
 					a_extra["error"] = a_message;
-					a_response.set_content(a_extra.dump(), "application/json");
+					a_response.set_content(Dump(a_extra), "application/json");
 					return httplib::Server::HandlerResponse::Handled;
 				};
 				const auto lower = [](std::string a_text) {
