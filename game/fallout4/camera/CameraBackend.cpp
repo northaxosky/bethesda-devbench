@@ -164,6 +164,16 @@ namespace dvb::fallout4
 			return snapshot;
 		}
 
+		void RequireLoadedScene(const RE::PlayerCamera& a_camera)
+		{
+			const auto player = RE::PlayerCharacter::GetSingleton();
+			if (!a_camera.currentState || !a_camera.cameraRoot || !player ||
+				!player->Get3D() || !player->GetParentCell() ||
+				!RE::PlayerControls::GetSingleton())
+				throw ToolError(422,
+					"free camera requires a loaded scene, a registered camera state, and player controls");
+		}
+
 		void ApplyPov(RE::PlayerCamera& a_camera, tools::CameraPov a_pov)
 		{
 			using SetPov = void (*)(RE::PlayerCamera*);
@@ -255,6 +265,7 @@ namespace dvb::fallout4
 									return result;
 								}
 
+								RequireLoadedScene(*camera);
 								camera->ToggleFreeCameraMode(false);
 								const bool isFree = IsFreeCamera(*camera);
 								ownership->ClaimTransition(wasFree, isFree);
