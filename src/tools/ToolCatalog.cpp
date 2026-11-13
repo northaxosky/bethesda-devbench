@@ -5,6 +5,7 @@
 #include "ConsoleTool.h"
 #include "GameTool.h"
 #include "InspectTool.h"
+#include "NoticeTool.h"
 #include "PingTool.h"
 #include "camera/CameraTool.h"
 #include "capture/CaptureTool.h"
@@ -58,6 +59,7 @@ namespace dvb::tools
 			BuildGameDescriptor(gamePolicy),
 			scenario::BuildScenarioDescriptor(),
 			BuildBridgeSetupDescriptor(),
+			BuildNoticeDescriptor(),
 			papyrus::BuildPapyrusDescriptor(),
 			input::BuildInputDescriptor(&inputBackend),
 			recording::BuildRecordDescriptor(&recordingBackend),

@@ -11,6 +11,7 @@
 #include "platform/ProcessWindow.h"
 #include "tools/BridgeSetupTool.h"
 #include "tools/ExtensionDescriptorRefresh.h"
+#include "tools/NoticeTool.h"
 #include "tools/health/StallWatchdog.h"
 #include "tools/scenario/ScenarioTool.h"
 
@@ -145,6 +146,7 @@ namespace dvb
 		};
 		Notices::AttachToReplies(server.Tools(), modalSource);
 		runtime->modalWatch = Modal::Watch(server.Events(), modalSource);
+		tools::RegisterNoticeTool(server.Tools());
 
 		auto console = runtime->adapter.console(server.Events());
 		runtime->consoleLifetime = std::move(console.lifetime);

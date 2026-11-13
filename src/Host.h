@@ -56,7 +56,7 @@ namespace dvb
 		std::function<void()> shutdown;
 	};
 
-	// Owns the one game-agnostic 15-tool/service stack. Native entrypoints only
+	// Owns the one game-agnostic 16-tool/service stack. Native entrypoints only
 	// initialize RuntimeContext, assemble HostAdapter, and forward lifecycle edges.
 	class Host
 	{

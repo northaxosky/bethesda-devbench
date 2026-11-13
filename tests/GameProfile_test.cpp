@@ -77,7 +77,7 @@ TEST_CASE("generated catalogs expose adapter identity without changing tool coun
 	CHECK(vr.at("profile").at("executable") == "SkyrimVR.exe");
 	CHECK(vr.at("runtimeVariant") == "vr");
 	CHECK(vr.at("vr") == true);
-	CHECK(fallout.at("tools").size() == 15);
+	CHECK(fallout.at("tools").size() == 16);
 	CHECK(vr.at("tools").size() == fallout.at("tools").size());
 }
 
@@ -100,7 +100,7 @@ TEST_CASE("offline catalog bundle carries every canonical runtime schema")
 	CHECK(catalogs[2].at("profile").at("executable") == "SkyrimVR.exe");
 	CHECK(catalogs[1].at("profile").at("aliases")[0] == "skyrimse");
 	CHECK(catalogs[1].at("profile").at("aliases")[1] == "sse");
-	CHECK(catalogs[0].at("tools").size() == 15);
-	CHECK(catalogs[1].at("tools").size() == 15);
-	CHECK(catalogs[2].at("tools").size() == 15);
+	CHECK(catalogs[0].at("tools").size() == 16);
+	CHECK(catalogs[1].at("tools").size() == 16);
+	CHECK(catalogs[2].at("tools").size() == 16);
 }
