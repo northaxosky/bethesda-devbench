@@ -538,6 +538,32 @@ TEST_CASE("waitFor resets its cursor between repetitions and ignores stale event
 	CHECK(result.value.at("results")[3].at("repetition") == 1);
 }
 
+TEST_CASE("a waitFor right after a waitFor resumes from the event it matched")
+{
+	ToolRegistry registry;
+	EventBus     events;
+	registry.Register(Descriptor("emit-both"), [&](const json&, const ToolContext&) {
+		events.Publish("first", json::object());
+		events.Publish("second", json::object());
+		return json{ { "ok", true } };
+	});
+	ScenarioService service(registry, events);
+	service.Register();
+
+	const auto result = Scenario(
+		registry,
+		json{
+			{ "steps", json::array({
+						   json{ { "tool", "emit-both" } },
+						   json{ { "waitFor", json{ { "topic", "first" } } }, { "timeoutMs", 5 }, { "pollMs", 1 } },
+						   json{ { "waitFor", json{ { "topic", "second" } } }, { "timeoutMs", 5 }, { "pollMs", 1 } },
+					   }) },
+		});
+	CHECK(result.ok);
+	CHECK(result.value.at("ok").get<bool>());
+	CHECK(result.value.at("results")[2].at("result").at("satisfied").get<bool>());
+}
+
 TEST_CASE("waitFor reports event ring loss instead of blessing an incomplete trace")
 {
 	ToolRegistry registry;

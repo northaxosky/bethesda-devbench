@@ -126,6 +126,7 @@ namespace dvb::tools::scenario
 			bool failed = false;
 			bool cancelled = false;
 			bool runTimedOut = false;
+			std::optional<std::uint64_t> matchedSeq;  // set by a satisfied waitFor
 		};
 
 		enum class StopReason
@@ -1388,6 +1389,7 @@ namespace dvb::tools::scenario
 				++repetition)
 			{
 				std::optional<ActionCorrelation> correlation;
+				ScenarioPolicy::WaitForChain     waitChain;
 				bool                             sceneMismatch = false;
 				for (std::size_t index = 0;
 					index < a_record->plan.steps.size() && !aborted;
@@ -1408,6 +1410,7 @@ namespace dvb::tools::scenario
 						a_record->currentRepetition = repetition;
 					}
 					const Step& step = a_record->plan.steps[index];
+					const auto  waitForSince = waitChain.Take();
 					events.Publish(
 						"scenario.step",
 						StepEvent(*a_record, step, index, repetition, "started"));
@@ -1420,7 +1423,10 @@ namespace dvb::tools::scenario
 						repetition,
 						a_runDeadline,
 						correlation,
+						waitForSince,
 						sceneMismatch);
+					if (outcome.matchedSeq)
+						waitChain.Matched(*outcome.matchedSeq);
 					outcome.transcript["elapsedMs"] =
 						std::chrono::duration_cast<Milliseconds>(
 							Clock::now() - stepStarted)
@@ -1510,6 +1516,7 @@ namespace dvb::tools::scenario
 			std::size_t                       a_repetition,
 			Clock::time_point                 a_runDeadline,
 			std::optional<ActionCorrelation>& a_correlation,
+			std::optional<std::uint64_t>      a_waitForSince,
 			bool&                             a_sceneMismatch)
 		{
 			StepOutcome outcome;
@@ -1757,7 +1764,8 @@ namespace dvb::tools::scenario
 					a_index,
 					a_repetition,
 					a_runDeadline,
-					a_correlation);
+					a_correlation,
+					a_waitForSince);
 
 			if (!a_step.condition.empty())
 				return ExecuteStateCondition(
@@ -2131,7 +2139,8 @@ namespace dvb::tools::scenario
 			std::size_t                       a_index,
 			std::size_t                       a_repetition,
 			Clock::time_point                 a_runDeadline,
-			std::optional<ActionCorrelation>& a_correlation)
+			std::optional<ActionCorrelation>& a_correlation,
+			std::optional<std::uint64_t>      a_waitForSince)
 		{
 			StepOutcome outcome;
 			outcome.transcript = StepBase(a_step, a_index, a_repetition);
@@ -2144,8 +2153,8 @@ namespace dvb::tools::scenario
 
 			const auto expectedOperation =
 				a_correlation ? a_correlation->gameOperationId : std::nullopt;
-			std::uint64_t cursor =
-				a_correlation ? a_correlation->eventCursor : events.HeadSeq();
+			std::uint64_t cursor = a_correlation ? a_correlation->eventCursor :
+			                                       a_waitForSince.value_or(events.HeadSeq());
 			a_correlation.reset();
 			const auto stepDeadline = Clock::now() + a_step.timeout;
 
@@ -2218,6 +2227,7 @@ namespace dvb::tools::scenario
 						};
 						outcome.transcript["result"] =
 							json{ { "satisfied", true }, { "seq", event.seq } };
+						outcome.matchedSeq = event.seq;
 						if (!modalResponses.empty())
 							outcome.transcript["modalResponses"] =
 								std::move(modalResponses);
