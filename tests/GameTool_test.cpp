@@ -261,7 +261,7 @@ TEST_CASE("game advanceTime validates signed bounds and reports completion truth
 	dvb::tools::RegisterGameTool(allowed, true, fake.Backend());
 	for (const auto& bad : {
 			 json{ { "action", "advanceTime" } },
-			 json{ { "action", "advanceTime" }, { "hours", "1" } },
+			 json{ { "action", "advanceTime" }, { "hours", "soon" } },
 			 json{ { "action", "advanceTime" }, { "hours", 0 } },
 			 json{ { "action", "advanceTime" }, { "hours", 100001 } },
 			 json{ { "action", "advanceTime" }, { "hours", -100001 } },

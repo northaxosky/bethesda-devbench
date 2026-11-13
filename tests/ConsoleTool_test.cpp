@@ -50,7 +50,7 @@ TEST_CASE("console validates arguments and requires explicit permission")
 	CHECK(Invoke(registry, json{ { "command", "   \t" } }).errorCode == 400);
 	CHECK(Invoke(registry, json{ { "command", "help\nquit" } }).errorCode == 400);
 	CHECK(Invoke(registry, json{ { "command", std::string("a\0b", 3) } }).errorCode == 400);
-	CHECK(Invoke(registry, json{ { "command", "help" }, { "capture", "true" } }).errorCode == 400);
+	CHECK(Invoke(registry, json{ { "command", "help" }, { "capture", "maybe" } }).errorCode == 400);
 	CHECK(fake.submissions.empty());
 }
 

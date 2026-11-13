@@ -1,6 +1,7 @@
 #include "CaptureTool.h"
 
 #include "Config.h"
+#include "ExtensionArgs.h"
 #include "Ssim.h"
 #include "ToolExtensions.h"
 
@@ -943,7 +944,7 @@ namespace dvb::tools::capture
 			const auto outputPath = directory / (CaptureStem(a_args) + ".png");
 			EnsureNewArtifactPaths(outputPath);
 
-			json providerArgs = a_args;
+			json providerArgs = ExtensionArgs(a_args, a_context);
 			providerArgs["outputPath"] = JsonPath(outputPath);
 			providerArgs["requestId"] = requestId;
 			const auto cursor = events.HeadSeq();
@@ -1305,6 +1306,7 @@ namespace dvb::tools::capture
 			kinds.push_back(provider);
 		descriptor.inputSchema = json{
 			{ "type", "object" },
+			{ "additionalProperties", true },  // providers take their own arguments
 			{ "properties", json{
 								{ "kind", json{ { "type", "string" }, { "default", "auto" },
 											  { "enum", std::move(kinds) },

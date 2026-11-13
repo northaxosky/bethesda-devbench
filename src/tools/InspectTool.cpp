@@ -1,5 +1,6 @@
 #include "InspectTool.h"
 
+#include "ExtensionArgs.h"
 #include "ToolExtensions.h"
 
 #include <algorithm>
@@ -69,7 +70,7 @@ namespace dvb::tools
 				return json{ { "extensions", std::move(extensions) } };
 			}
 			if (const auto extension = ToolExtensions::Find("inspect", kind))
-				return extension->handler(a_args, a_context);
+				return extension->handler(ExtensionArgs(a_args, a_context), a_context);
 
 			throw ToolError(400,
 				std::format(
@@ -130,6 +131,7 @@ namespace dvb::tools
 			"consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.";
 		descriptor.inputSchema = json{
 			{ "type", "object" },
+			{ "additionalProperties", true },  // extension kinds take their own arguments
 			{ "properties", json{
 								{ "kind", json{ { "type", "string" }, { "enum", std::move(kinds) }, { "default", "state" } } },
 								{ "formId", json{ { "type", "string" }, { "description", "inventory owner, effects actor, or refs form: 0x-prefixed/bare hexadecimal FormID or EditorID" } } },

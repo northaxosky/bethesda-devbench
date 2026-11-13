@@ -150,7 +150,7 @@ TEST_CASE("wait and sleep validate permission hours and furniture target before 
 
 	for (const auto& args : {
 			 dvb::json::array(),
-			 dvb::json{ { "hours", "1" } },
+			 dvb::json{ { "hours", "soon" } },
 			 dvb::json{ { "hours", 0 } },
 			 dvb::json{ { "hours", 100001 } },
 			 dvb::json{ { "hours", 1 }, { "target", "0x1" } },

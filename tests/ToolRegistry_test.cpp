@@ -119,3 +119,83 @@ TEST_CASE("registration listener fires for tools added after wiring")
 	CHECK(seen == 1);
 	CHECK(lastName == "late");
 }
+
+namespace
+{
+	ToolDescriptor Declared(std::string a_name, json a_schema)
+	{
+		ToolDescriptor d = Desc(std::move(a_name));
+		d.inputSchema = std::move(a_schema);
+		return d;
+	}
+
+	const json kSchema = json{ { "type", "object" }, { "properties", { { "action", json::object() }, { "args", json::object() } } } };
+
+	auto EmptyHandler()
+	{
+		return [](const json&, const ToolContext&) { return json::object(); };
+	}
+}
+
+TEST_CASE("an unknown top-level key is reported in the reply's warnings")
+{
+	ToolRegistry reg;
+	reg.Register(Declared("t", kSchema), EmptyHandler());
+
+	const ToolResult r = reg.Invoke("t", json{ { "action", "go" }, { "params", json::object() } }, ToolContext{});
+	CHECK(r.ok);
+	CHECK(r.value.contains("warnings"));
+	CHECK(r.value["warnings"].size() == 1);
+	const std::string w = r.value["warnings"][0];
+	CHECK(w.find("params") != std::string::npos);
+	CHECK(w.find("action, args") != std::string::npos);  // names the accepted keys
+}
+
+TEST_CASE("schemas that do not enumerate their keys are never checked")
+{
+	ToolRegistry reg;
+	reg.Register(Desc("schemaless"), EmptyHandler());
+	reg.Register(Declared("open", json{ { "type", "object" }, { "properties", { { "a", json::object() } } }, { "additionalProperties", true } }),
+		EmptyHandler());
+	reg.Register(Declared("composed", json{ { "type", "object" }, { "properties", { { "a", json::object() } } }, { "oneOf", json::array() } }),
+		EmptyHandler());
+
+	for (const char* name : { "schemaless", "open", "composed" })
+	{
+		const ToolResult r = reg.Invoke(name, json{ { "anything", 1 } }, ToolContext{});
+		CHECK(r.ok);
+		CHECK(!r.value.contains("warnings"));
+	}
+}
+
+TEST_CASE("stringified arguments are coerced to the schema's types")
+{
+	ToolRegistry   reg;
+	ToolDescriptor d = Desc("typed");
+	d.inputSchema = json{ { "type", "object" },
+		{ "properties", json{ { "flag", json{ { "type", "boolean" } } }, { "n", json{ { "type", "integer" } } }, { "x", json{ { "type", "number" } } }, { "list", json{ { "type", "array" } } }, { "s", json{ { "type", "string" } } } } } };
+	reg.Register(std::move(d), [](const json& a_args, const ToolContext&) { return a_args; });
+
+	const ToolResult r = reg.Invoke("typed", json{ { "flag", "true" }, { "n", "20000" }, { "x", "1.5" }, { "list", "[\"a\",\"b\"]" }, { "s", "true" } }, ToolContext{});
+	CHECK(r.ok);
+	CHECK(r.value["flag"] == true);
+	CHECK(r.value["n"] == 20000);
+	CHECK(r.value["x"] == 1.5);
+	CHECK(r.value["list"] == (json::array({ "a", "b" })));
+	CHECK(r.value["s"] == "true");  // a string property is left alone
+}
+
+TEST_CASE("a handler can reach the caller's arguments as sent")
+{
+	ToolRegistry   reg;
+	ToolDescriptor d = Desc("typed");
+	d.inputSchema = json{ { "type", "object" }, { "properties", json{ { "list", json{ { "type", "array" } } } } } };
+	reg.Register(std::move(d), [](const json& a_args, const ToolContext& a_ctx) {
+		return json{ { "coerced", a_args["list"] }, { "raw", a_ctx.rawArgs ? (*a_ctx.rawArgs)["list"] : json(nullptr) } };
+	});
+
+	const ToolResult r = reg.Invoke("typed", json{ { "list", "[1,2]" } }, ToolContext{});
+	CHECK(r.ok);
+	CHECK(r.value["coerced"] == (json::array({ 1, 2 })));
+	CHECK(r.value["raw"] == "[1,2]");
+}

@@ -1,5 +1,6 @@
 #include "MenuTool.h"
 
+#include "ExtensionArgs.h"
 #include "ToolExtensions.h"
 #include "tools/ToolPermissions.h"
 
@@ -181,7 +182,7 @@ namespace dvb::tools
 						std::format(
 							"no handler registered for menu '{}' (see menu list .registered)",
 							name));
-				return extension->handler(a_args, a_context);
+				return extension->handler(ExtensionArgs(a_args, a_context), a_context);
 			}
 
 			if (action == "accept")
@@ -290,6 +291,7 @@ namespace dvb::tools
 			registeredSummary + ".";
 		descriptor.inputSchema = json{
 			{ "type", "object" },
+			{ "additionalProperties", true },  // invoke forwards handler-specific arguments
 			{ "properties", json{
 								{ "action", json{ { "type", "string" }, { "enum", json::array({ "list", "describe", "accept", "open", "close", "invoke" }) }, { "default", "list" } } },
 								{ "name", json{ { "type", "string" }, { "maxLength", kMaxMenuNameBytes }, { "description", "describe/invoke: registered menu (" + registeredSummary + "); open/close: engine menu" } } },
