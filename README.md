@@ -21,6 +21,7 @@ The implementation targets upstream **v1.18.2**:
 `input`, `menu`, `console`, `scenario`, `inspect`, `game`, `camera`, `papyrus`,
 `capture`, `record`, `recordings`, `wait`, `sleep`, `mcp_bridge_setup`, and `ping`.
 Use MCP tool discovery or `GET /api/tools` for arguments and capabilities.
+Replies may carry plugin `notices` (omit with `noNotices: true`) and `warnings` naming unknown top-level keys.
 
 Capture uses optional providers or an explicitly selected native screenshot
 fallback, which is inconclusive for visual assertions. No RenderDoc provider
