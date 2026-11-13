@@ -45,6 +45,7 @@ namespace dvb
 		std::vector<std::string>      recordingGameIds;
 		std::vector<std::string>      recordingRuntimeCompatibility;
 		std::vector<std::string>      contextFreeMenus;
+		std::vector<std::string>      nonBlockingMenus;
 		bool                          vr = false;
 	};
 

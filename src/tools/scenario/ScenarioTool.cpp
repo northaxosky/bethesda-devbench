@@ -1,5 +1,6 @@
 #include "tools/scenario/ScenarioTool.h"
 
+#include "ModalLogic.h"
 #include "ScenarioPolicy.h"
 #include "tools/scenario/ValuePredicate.h"
 #include "waits/PublishSignal.h"
@@ -1839,9 +1840,7 @@ namespace dvb::tools::scenario
 				if (!item.is_string())
 					continue;
 				const auto name = item.get<std::string>();
-				if (name == "HUD Menu" || name == "HUDMenu" ||
-					name == "Cursor Menu" || name == "CursorMenu" ||
-					name == "Console")
+				if (Modal::IsNonBlocking(config.nonBlockingMenus, name))
 					continue;
 				blocking.push_back(name);
 			}

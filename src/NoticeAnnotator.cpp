@@ -1,5 +1,6 @@
 #include "NoticeAnnotator.h"
 
+#include "ModalLogic.h"
 #include "Notices.h"
 #include "ToolRegistry.h"
 
@@ -9,24 +10,45 @@ namespace dvb::Notices
 {
 	namespace
 	{
-		ToolRegistry::Annotation Annotate()
+		ToolRegistry::Annotation Annotate(const ModalSource& a_modal)
 		{
 			ToolRegistry::Annotation out;
 			out.fields = json::object();
+
+			if (a_modal.openMenus)
+			{
+				const auto blockers =
+					Modal::Blockers(a_modal.nonBlockingMenus, a_modal.openMenus());
+				if (!blockers.empty())
+				{
+					json list = json::array();
+					for (const auto& blocker : blockers)
+					{
+						list.push_back(json{ { "name", blocker.name }, { "hint", blocker.hint } });
+						out.summary += std::format(
+							"blocked by {}: {}; ", blocker.name, blocker.hint);
+					}
+					out.fields["blockedBy"] = std::move(list);
+				}
+			}
+
 			const auto notices = Global().Active(NowMs());
-			if (notices.empty())
-				return out;
-			out.fields["notices"] = ToJson(notices);
-			for (const auto& notice : notices)
-				out.summary += std::format(
-					"{} notice from {}: {}; ", SeverityName(notice.severity), notice.source, notice.text);
-			out.summary.resize(out.summary.size() - 2);
+			if (!notices.empty())
+			{
+				out.fields["notices"] = ToJson(notices);
+				for (const auto& notice : notices)
+					out.summary += std::format(
+						"{} notice from {}: {}; ", SeverityName(notice.severity), notice.source, notice.text);
+			}
+			if (!out.summary.empty())
+				out.summary.resize(out.summary.size() - 2);
 			return out;
 		}
 	}
 
-	void AttachToReplies(ToolRegistry& a_registry)
+	void AttachToReplies(ToolRegistry& a_registry, ModalSource a_modal)
 	{
-		a_registry.SetAnnotator(Annotate);
+		a_registry.SetAnnotator(
+			[modal = std::move(a_modal)] { return Annotate(modal); });
 	}
 }

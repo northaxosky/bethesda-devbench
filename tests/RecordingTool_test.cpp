@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "TestTempDir.h"
 
+#include "GameProfile.h"
 #include "tools/recording/RecordingModel.h"
 #include "tools/recording/RecordingTool.h"
 
@@ -330,7 +331,9 @@ TEST_CASE("replay accepts runtime FO4 null form identity fields")
 					} },
 			};
 		});
-	ScenarioService scenarios(registry, events);
+	ScenarioService scenarios(
+		registry, events,
+		{ .nonBlockingMenus = dvb::Fallout4Profile().nonBlockingMenus });
 	scenarios.Register();
 	RecordingConfiguration configuration;
 	configuration.root = root.path;

@@ -19,9 +19,18 @@ a separate, user-facing plugin.
 
 The implementation targets upstream **v1.18.2**:
 `input`, `menu`, `console`, `scenario`, `inspect`, `game`, `camera`, `papyrus`,
-`capture`, `record`, `recordings`, `wait`, `sleep`, `mcp_bridge_setup`, and `ping`.
+`capture`, `record`, `recordings`, `wait`, `sleep`, `notice`, `mcp_bridge_setup`, and `ping`.
 Use MCP tool discovery or `GET /api/tools` for arguments and capabilities.
-Replies may carry plugin `notices` (omit with `noNotices: true`) and `warnings` naming unknown top-level keys.
+Replies may carry `blockedBy`, plugin or agent `notices` (omit both with `noNotices: true`),
+and `warnings` naming unknown top-level keys.
+
+While a blocking menu is open every reply carries `blockedBy`:
+`[{ "name": "MessageBoxMenu", "hint": "menu action=describe to read it, ..." }]`, and a failed call
+gets the same text appended to its error. `modal.blocked` and `modal.cleared` events fire on the
+event stream. Each game profile lists its always-open menus (Fallout 4: `HUDMenu`, `CursorMenu`,
+`Console`, `FaderMenu`); `MainMenu` and `LoadingMenu` are reported with a state hint. The `notice`
+tool posts a message every reply carries: `notice action=post key=... text=... severity=critical`
+(`info|warning|critical`, optional `source`, `ttlMs`), `action=clear key=...`, or `action=list`.
 
 Capture uses optional providers or an explicitly selected native screenshot
 fallback, which is inconclusive for visual assertions. No RenderDoc provider

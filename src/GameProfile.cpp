@@ -39,6 +39,7 @@ namespace dvb
 			.recordingGameIds = { "fo4", "fallout4", "fallout 4" },
 			.recordingRuntimeCompatibility = { "ae" },
 			.contextFreeMenus = { "PauseMenu" },
+			.nonBlockingMenus = { "HUDMenu", "CursorMenu", "Console", "FaderMenu" },
 			.vr = false,
 		};
 	}
@@ -71,6 +72,8 @@ namespace dvb
 				vr ? std::vector<std::string>{ "vr" } :
 				     std::vector<std::string>{ "se", "ae" },
 			.contextFreeMenus = { "Journal Menu" },
+			.nonBlockingMenus = { "HUD Menu", "Cursor Menu", "Fader Menu", "Mist Menu",
+				"LootMenu", "Console", "Overlay Interaction Menu" },
 			.vr = vr,
 		};
 	}

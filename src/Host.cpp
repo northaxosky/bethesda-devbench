@@ -3,6 +3,7 @@
 #include "GameState.h"
 #include "HostApi.h"
 #include "Log.h"
+#include "ModalWatch.h"
 #include "NoticeAnnotator.h"
 #include "RuntimePaths.h"
 #include "Server.h"
@@ -48,13 +49,16 @@ namespace dvb
 		std::shared_ptr<tools::capture::CaptureService>         capture;
 		std::shared_ptr<tools::rest::RestService>               rest;
 		std::optional<EventBus::SubId>                          restReadiness;
+		std::optional<EventBus::SubId>                          modalWatch;
 		std::unique_ptr<tools::ExtensionDescriptorRefresh>      extensions;
 
 		Runtime(HostAdapter a_adapter, Config a_config) :
 			adapter(std::move(a_adapter)),
 			config(std::move(a_config)),
 			server("127.0.0.1", config.port),
-			scenarios(server.Tools(), server.Events())
+			scenarios(server.Tools(), server.Events(),
+				tools::scenario::ScenarioConfig{
+					.nonBlockingMenus = adapter.profile.nonBlockingMenus })
 		{}
 
 		~Runtime()
@@ -76,6 +80,11 @@ namespace dvb
 			}
 			extensions.reset();
 			liveness.reset();
+			if (modalWatch)
+			{
+				server.Events().Unsubscribe(*modalWatch);
+				modalWatch.reset();
+			}
 			if (restReadiness)
 			{
 				server.Events().Unsubscribe(*restReadiness);
@@ -130,7 +139,12 @@ namespace dvb
 		server.Events().SetFrameProvider(&game::CurrentFrame);
 		HostApi::Init(
 			server.Tools(), server.Events(), runtime->adapter.timeScale);
-		Notices::AttachToReplies(server.Tools());
+		Notices::ModalSource modalSource{
+			.openMenus = runtime->adapter.openMenus,
+			.nonBlockingMenus = runtime->adapter.profile.nonBlockingMenus,
+		};
+		Notices::AttachToReplies(server.Tools(), modalSource);
+		runtime->modalWatch = Modal::Watch(server.Events(), modalSource);
 
 		auto console = runtime->adapter.console(server.Events());
 		runtime->consoleLifetime = std::move(console.lifetime);

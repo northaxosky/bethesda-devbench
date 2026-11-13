@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace dvb::tools::scenario
 {
@@ -26,6 +27,8 @@ namespace dvb::tools::scenario
 		std::chrono::milliseconds defaultWaitUntilTimeout{ kDefaultGateTimeoutMs };
 		std::chrono::milliseconds defaultWaitForPoll{ 100 };
 		std::chrono::milliseconds defaultWaitUntilPoll{ 250 };
+		// Open menus the noBlockingMenu gate ignores (the game profile's list).
+		std::vector<std::string>  nonBlockingMenus;
 	};
 
 	ToolDescriptor BuildScenarioDescriptor(const ScenarioConfig& a_config = {});
