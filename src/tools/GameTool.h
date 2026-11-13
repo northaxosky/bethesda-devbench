@@ -155,6 +155,9 @@ namespace dvb::tools
 			const std::optional<std::string>&)>
 												  resolveMutationDirectory;
 		std::function<GameAdvanceReceipt(double)> advanceTime;
+		// Live [General] bAlwaysActive; nullopt/false when the setting is absent.
+		std::function<std::optional<bool>()> alwaysActive;
+		std::function<bool(bool)>            setAlwaysActive;
 	};
 
 	ToolDescriptor BuildGameDescriptor(const GameSavePolicy& a_policy = {});

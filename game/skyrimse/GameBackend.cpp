@@ -1,5 +1,6 @@
 #include "GameBackend.h"
 
+#include "BackgroundRun.h"
 #include "Lifecycle.h"
 #include "MainThread.h"
 #include "io/PathText.h"
@@ -657,6 +658,26 @@ namespace dvb::skyrimse
 		}
 	}
 
+	namespace
+	{
+		std::optional<bool> ReadAlwaysActive()
+		{
+			const auto value = MainThread::RunAndWait([]() -> json {
+				const auto current = BackgroundRun::AlwaysActive();
+				return current ? json(*current) : json(nullptr);
+			});
+			return value.is_boolean() ? std::optional(value.get<bool>()) : std::nullopt;
+		}
+
+		bool WriteAlwaysActive(bool a_enabled)
+		{
+			return MainThread::RunAndWait([a_enabled]() -> json {
+					   return BackgroundRun::SetAlwaysActive(a_enabled);
+				   })
+			    .get<bool>();
+		}
+	}
+
 	tools::GameBackend MakeGameBackend()
 	{
 		return tools::GameBackend{
@@ -673,6 +694,8 @@ namespace dvb::skyrimse
 			.readSaveMetadata = &ReadSaveMetadata,
 			.resolveMutationDirectory = &ResolveMutationDirectory,
 			.advanceTime = &AdvanceTime,
+			.alwaysActive = &ReadAlwaysActive,
+			.setAlwaysActive = &WriteAlwaysActive,
 		};
 	}
 }

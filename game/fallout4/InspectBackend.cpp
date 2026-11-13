@@ -1,5 +1,6 @@
 #include "InspectBackend.h"
 
+#include "BackgroundRun.h"
 #include "GameState.h"
 #include "LivePlayer.h"
 #include "Lifecycle.h"
@@ -53,6 +54,12 @@ namespace dvb::fallout4
 			};
 		}
 
+		json AlwaysActiveJson()
+		{
+			const auto value = BackgroundRun::AlwaysActive();
+			return value ? json(*value) : json(nullptr);
+		}
+
 		json ReadState()
 		{
 			auto out = MainThread::RunAndWait([]() -> json {
@@ -79,6 +86,7 @@ namespace dvb::fallout4
 									   { "lastEvent", lifecycle.lastEvent.empty() ? json(nullptr) : json(lifecycle.lastEvent) },
 								   } },
 					{ "window", WindowFocus::Snapshot() },
+					{ "alwaysActive", AlwaysActiveJson() },
 					{ "frame", game::CurrentFrame() },
 				};
 				return state;

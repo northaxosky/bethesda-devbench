@@ -556,3 +556,35 @@ TEST_CASE("game read-only inspect aliases cannot dispatch mutations")
 			  .errorCode == 400);
 	CHECK(fake.requests.empty());
 }
+
+TEST_CASE("game alwaysActive reads freely, gates and validates the write, and reports a missing setting")
+{
+	std::optional<bool> setting = false;
+	bool                present = true;
+	const auto          backend = dvb::tools::GameBackend{
+		.alwaysActive = [&] { return present ? setting : std::nullopt; },
+		.setAlwaysActive = [&](bool a_enabled) {
+			if (present)
+				setting = a_enabled;
+			return present; },
+	};
+	ToolRegistry denied;
+	dvb::tools::RegisterGameTool(denied, false, backend);
+	ToolRegistry allowed;
+	dvb::tools::RegisterGameTool(allowed, true, backend);
+
+	const auto read = Invoke(denied, json{ { "action", "getAlwaysActive" } });
+	CHECK(read.ok);
+	CHECK(read.value.at("alwaysActive") == false);
+	CHECK(!Invoke(denied, json{ { "action", "setAlwaysActive" }, { "enabled", true } }).ok);
+	CHECK(*setting == false);
+
+	CHECK(Invoke(allowed, json{ { "action", "setAlwaysActive" } }).errorCode == 400);
+	CHECK(Invoke(allowed, json{ { "action", "setAlwaysActive" }, { "enabled", 1 } }).errorCode == 400);
+	const auto written = Invoke(allowed, json{ { "action", "setAlwaysActive" }, { "enabled", true } });
+	CHECK(written.value.at("alwaysActive") == true);
+
+	present = false;
+	CHECK(Invoke(allowed, json{ { "action", "setAlwaysActive" }, { "enabled", false } }).errorCode == 503);
+	CHECK(Invoke(allowed, json{ { "action", "getAlwaysActive" } }).value.at("alwaysActive").is_null());
+}

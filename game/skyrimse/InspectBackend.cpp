@@ -1,5 +1,6 @@
 #include "InspectBackend.h"
 
+#include "BackgroundRun.h"
 #include "GameState.h"
 #include "Lifecycle.h"
 #include "MainThread.h"
@@ -97,6 +98,12 @@ namespace dvb::skyrimse
 			};
 		}
 
+		json AlwaysActiveJson()
+		{
+			const auto value = BackgroundRun::AlwaysActive();
+			return value ? json(*value) : json(nullptr);
+		}
+
 		json ReadState()
 		{
 			auto out =
@@ -135,6 +142,7 @@ namespace dvb::skyrimse
 										json(nullptr) :
 										json(lifecycle.lastEvent) },
 							} },
+						{ "alwaysActive", AlwaysActiveJson() },
 						{ "frame", game::CurrentFrame() },
 					};
 				});

@@ -2,6 +2,7 @@
 
 #include "ToolExtensions.h"
 #include "ToolPermissions.h"
+#include "platform/ProcessWindow.h"
 
 #include <algorithm>
 #include <array>
@@ -427,6 +428,31 @@ namespace dvb::tools
 			return std::nullopt;
 		}
 
+		json HandleAlwaysActive(
+			const json& a_args, std::string_view a_action, bool a_allowActions, const GameBackend& a_backend)
+		{
+			const bool setting = a_action == "setAlwaysActive";
+			ValidateOnly(a_args, setting ?
+				std::initializer_list<std::string_view>{ "action", "enabled" } :
+				std::initializer_list<std::string_view>{ "action" });
+			if (!a_backend.alwaysActive)
+				throw ToolError(503, "bAlwaysActive is unavailable in this runtime");
+			if (setting)
+			{
+				RequireToolPermission(a_allowActions, ToolPermission::kGameActions);
+				const auto enabled = a_args.find("enabled");
+				if (enabled == a_args.end() || !enabled->is_boolean())
+					throw ToolError(400, "game setAlwaysActive: 'enabled' is required (boolean)");
+				if (!a_backend.setAlwaysActive || !a_backend.setAlwaysActive(enabled->get<bool>()))
+					throw ToolError(503, "bAlwaysActive:General is not available in this runtime");
+			}
+			const auto current = a_backend.alwaysActive();
+			return json{
+				{ "alwaysActive", current ? json(*current) : json(nullptr) },
+				{ "windowFocused", platform::IsForegroundOwnedByCurrentProcess() },
+			};
+		}
+
 		json HandleGame(const json& a_args, bool a_allowActions, const GameBackend& a_backend)
 		{
 			RequireObject(a_args);
@@ -440,6 +466,9 @@ namespace dvb::tools
 
 			if (action == "list")
 				return HandleList(a_args, a_backend, { "action", "filter", "limit", "detail", "dir" });
+
+			if (action == "getAlwaysActive" || action == "setAlwaysActive")
+				return HandleAlwaysActive(a_args, action, a_allowActions, a_backend);
 
 			if (action != "save" && action != "load" && action != "loadLast" &&
 				action != "advanceTime")
@@ -684,7 +713,10 @@ namespace dvb::tools
 		descriptor.description =
 			std::format(
 				"Inspect save/load status, list {} {} saves with optional bounded {}, "
-				"queue a native save/load, or advance the native game calendar. ",
+				"queue a native save/load, or advance the native game calendar. getAlwaysActive/setAlwaysActive "
+				"(param enabled: boolean) read or set the engine's live [General] bAlwaysActive, which keeps "
+				"the game running while its window is in the background; the INI file is not changed. Both "
+				"return {{ alwaysActive (null when unavailable), windowFocused }}. ",
 				a_policy.gameName, a_policy.saveExtension,
 				a_policy.metadataDescription) +
 			"Mutations require allowGameActions=true, serialize one in-flight operation, never overwrite "
@@ -694,13 +726,14 @@ namespace dvb::tools
 		descriptor.inputSchema = json{
 			{ "type", "object" },
 			{ "properties", json{
-								{ "action", json{ { "type", "string" }, { "enum", json::array({ "status", "list", "save", "load", "loadLast", "advanceTime" }) }, { "default", "status" } } },
+								{ "action", json{ { "type", "string" }, { "enum", json::array({ "status", "list", "save", "load", "loadLast", "advanceTime", "getAlwaysActive", "setAlwaysActive" }) }, { "default", "status" } } },
 								{ "name", json{ { "type", "string" }, { "minLength", 1 }, { "maxLength", kMaxSaveNameBytes }, { "description", "save/load: extensionless " + a_policy.gameName + " save basename" } } },
 								{ "filter", json{ { "type", "string" }, { "maxLength", kMaxSaveFilterBytes }, { "description", "list: case-insensitive basename substring" } } },
 								{ "limit", json{ { "type", "integer" }, { "minimum", 1 }, { "maximum", kMaxSaveListLimit }, { "default", 100 } } },
 								{ "detail", json{ { "type", "boolean" }, { "default", false }, { "description", "list: parse bounded metadata from each returned " + a_policy.saveExtension + " header" } } },
 								{ "dir", json{ { "type", "string" }, { "maxLength", kMaxSaveDirectoryBytes }, { "description", "list: read an explicit save directory; mutations may only name the native effective directory" } } },
 								{ "hours", json{ { "type", "number" }, { "minimum", -kMaxGameAdvanceHours }, { "maximum", kMaxGameAdvanceHours }, { "description", "advanceTime: finite non-zero signed game hours" } } },
+								{ "enabled", json{ { "type", "boolean" }, { "description", "setAlwaysActive: keep the game running while its window is in the background" } } },
 							} },
 			{ "additionalProperties", false },
 		};

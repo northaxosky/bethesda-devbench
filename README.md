@@ -84,7 +84,9 @@ denies foreground scheduling. Two startup options, both default on, fix this:
 game window is first visible; `disablePowerThrottling` opts the process out of
 EcoQoS. `inspect` `kind=state` reports `window`: `foreground` (live),
 `foregroundRequested`, `foregroundResult` (`ok|failed|pending|skipped`), and
-`powerThrottlingDisabled`.
+`powerThrottlingDisabled`. It also reports `alwaysActive`, the live `[General] bAlwaysActive`
+(`null` when absent). `game` `getAlwaysActive` / `setAlwaysActive enabled=<bool>` read or set it
+(the INI file is untouched; setting needs `allowGameActions`) and return `{alwaysActive, windowFocused}`.
 
 Use the companion for restart-surviving MCP, or connect directly to
 `http://127.0.0.1:<port>/mcp` (defaults: FO4 8930, Skyrim 8920, VR 8921).
