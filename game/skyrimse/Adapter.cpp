@@ -84,6 +84,7 @@ namespace dvb::skyrimse
 				       state.postLoadSucceeded != false;
 			},
 			.openMenus = [] { return Lifecycle::GetSnapshot().openMenus; },
+			.timeScale = [] { return RE::BSTimer::QGlobalTimeMultiplier(); },
 			.onStarted =
 				[](ToolRegistry& a_registry, EventBus&, const Config& a_config) {
 					ui::ConfigureFrontends(a_registry, a_config);

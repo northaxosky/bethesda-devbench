@@ -40,7 +40,8 @@ namespace dvb
 	RuntimeContext MakeRuntimeContext(
 		GameProfile a_profile, std::string a_runtimeVersion,
 		const void* a_pluginAddress, std::function<int()> a_currentFrame,
-		std::function<bool(std::function<void()>)> a_enqueueTask)
+		std::function<bool(std::function<void()>)> a_enqueueTask,
+		std::function<bool(std::function<void()>)> a_enqueueUiTask)
 	{
 		if (!a_pluginAddress)
 			throw std::invalid_argument("plugin module address is required");
@@ -59,6 +60,7 @@ namespace dvb
 			.pluginPath = ModulePath(module),
 			.currentFrame = std::move(a_currentFrame),
 			.enqueueTask = std::move(a_enqueueTask),
+			.enqueueUiTask = std::move(a_enqueueUiTask),
 		};
 	}
 
@@ -70,6 +72,8 @@ namespace dvb
 			throw std::invalid_argument("runtime context requires a frame provider");
 		if (!a_context.enqueueTask)
 			throw std::invalid_argument("runtime context requires a task enqueue provider");
+		if (!a_context.enqueueUiTask)
+			throw std::invalid_argument("runtime context requires a UI task enqueue provider");
 		const std::lock_guard lock(g_mutex);
 		g_context = std::make_shared<RuntimeContext>(std::move(a_context));
 	}

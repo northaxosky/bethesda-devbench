@@ -135,6 +135,13 @@ namespace
 					return false;
 				tasks->AddTask(std::move(a_task));
 				return true;
+			},
+			[](std::function<void()> a_task) {
+				const auto tasks = F4SE::GetTaskInterface();
+				if (!tasks)
+					return false;
+				tasks->AddUITask(std::move(a_task));
+				return true;
 			}));
 		REX::INFO("devbench {} loaded", DEVBENCH_VERSION_STRING);
 

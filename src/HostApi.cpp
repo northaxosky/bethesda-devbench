@@ -170,7 +170,7 @@ namespace dvb::HostApi
 
 			float GetTimeScale() override
 			{
-				return g_timeScale ? g_timeScale() : 1.0f;
+				return g_timeScale();
 			}
 
 			bool PostNotice(const char* a_key, const char* a_source, const char* a_severity, const char* a_text, std::uint32_t a_ttlMs) override

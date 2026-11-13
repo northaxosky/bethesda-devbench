@@ -22,7 +22,7 @@ namespace dvb::MainThread
 	{
 		const auto& runtime = GetRuntimeContext();
 		const auto& enqueue =
-			a_queue == Queue::kUi && runtime.enqueueUiTask ? runtime.enqueueUiTask : runtime.enqueueTask;
+			a_queue == Queue::kUi ? runtime.enqueueUiTask : runtime.enqueueTask;
 		if (!enqueue)
 			throw ToolError(
 				500, std::format("{} TaskInterface unavailable", runtime.profile.extenderName));

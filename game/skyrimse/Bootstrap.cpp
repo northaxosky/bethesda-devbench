@@ -167,6 +167,13 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 					return false;
 				tasks->AddTask(std::move(a_task));
 				return true;
+			},
+			[](std::function<void()> a_task) {
+				const auto tasks = SKSE::GetTaskInterface();
+				if (!tasks)
+					return false;
+				tasks->AddUITask(std::move(a_task));
+				return true;
 			}));
 		logs::info("devbench {} loaded", DEVBENCH_VERSION_STRING);
 		if (auto* messaging = SKSE::GetMessagingInterface())

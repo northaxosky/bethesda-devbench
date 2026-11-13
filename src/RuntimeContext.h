@@ -16,13 +16,14 @@ namespace dvb
 		std::filesystem::path             pluginPath;
 		std::function<int()>              currentFrame;
 		std::function<bool(std::function<void()>)> enqueueTask;
-		std::function<bool(std::function<void()>)> enqueueUiTask;  // optional; kUi falls back to enqueueTask
+		std::function<bool(std::function<void()>)> enqueueUiTask;
 	};
 
 	RuntimeContext MakeRuntimeContext(
 		GameProfile a_profile, std::string a_runtimeVersion,
 		const void* a_pluginAddress, std::function<int()> a_currentFrame,
-		std::function<bool(std::function<void()>)> a_enqueueTask);
+		std::function<bool(std::function<void()>)> a_enqueueTask,
+		std::function<bool(std::function<void()>)> a_enqueueUiTask);
 
 	void                  InitializeRuntimeContext(RuntimeContext a_context);
 	void                  ResetRuntimeContext();
