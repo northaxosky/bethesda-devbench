@@ -257,7 +257,7 @@ namespace dvb::tools::recording
 				a_file.find_first_of("/\\:") != std::string_view::npos ||
 				a_file.find('\0') != std::string_view::npos)
 				return false;
-			const fs::path path{ a_file };
+			const fs::path path = PathFromUtf8(a_file);
 			return !path.has_parent_path() && !path.has_root_path() &&
 			       LowerAscii(path.extension().string()) == ".json";
 		}
@@ -483,7 +483,7 @@ namespace dvb::tools::recording
 			throw ToolError(
 				400,
 				"'file' must be a bare .json recording name without traversal");
-		return root_ / fs::path(a_file);
+		return root_ / PathFromUtf8(a_file);
 	}
 
 	json RecordingStore::Load(std::string_view a_file) const

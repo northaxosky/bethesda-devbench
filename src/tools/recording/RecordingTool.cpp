@@ -1273,7 +1273,7 @@ namespace dvb::tools::recording
 				ReadBool(a_args, "captureCheckpoints", true);
 			const bool replayInputs = ReadBool(a_args, "replayInputs", true);
 			const std::string inputOwner =
-				"recording:" + std::filesystem::path(a_file).stem().string();
+				"recording:" + Utf8(PathFromUtf8(a_file).stem());
 			const bool hasCheckpoints =
 				meta.contains("checkpoints") &&
 				meta.at("checkpoints").is_array() &&
@@ -1651,7 +1651,7 @@ namespace dvb::tools::recording
 				{
 					auto step = BuildCaptureStep(
 						checkpoint, replayArgs,
-						std::filesystem::path(a_file).stem().string());
+						Utf8(PathFromUtf8(a_file).stem()));
 					const auto checkpointSettle = checkpoint.value(
 						"settleMs", captureSettleMs);
 					if (checkpointSettle > 0)
@@ -1795,7 +1795,7 @@ namespace dvb::tools::recording
 
 			scenario::ScenarioRunOptions options;
 			options.owner =
-				"recording:" + std::filesystem::path(file).stem().string();
+				"recording:" + Utf8(PathFromUtf8(file).stem());
 			options.resultMetadata = json{
 				{ "recording", file },
 				{ "restoration", plan.at("restoration") },

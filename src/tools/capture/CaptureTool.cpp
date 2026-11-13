@@ -245,7 +245,7 @@ namespace dvb::tools::capture
 			{
 				if (!out->is_string())
 					throw ToolError(400, "'outDir' must be a string");
-				ValidateRelativeRoot(fs::path(out->get<std::string>()));
+				ValidateRelativeRoot(PathFromUtf8(out->get<std::string>()));
 			}
 			(void)ReadBool(a_args, "allowNative", false);
 			(void)ReadBool(a_args, "excludeUi", true);
@@ -267,7 +267,7 @@ namespace dvb::tools::capture
 		{
 			fs::path root = a_configuration.captureDirectory;
 			if (const auto it = a_args.find("outDir"); it != a_args.end())
-				root = fs::path(it->get<std::string>());
+				root = PathFromUtf8(it->get<std::string>());
 			if (root.is_relative())
 				root = a_backend.gameRoot() / root;
 			return fs::absolute(root).lexically_normal();
@@ -467,7 +467,7 @@ namespace dvb::tools::capture
 
 		bool SameOutputPath(const fs::path& a_expected, std::string_view a_reported)
 		{
-			return PathKey(a_expected) == PathKey(fs::path(a_reported));
+			return PathKey(a_expected) == PathKey(PathFromUtf8(a_reported));
 		}
 
 		void ObserveReadyEvent(const EventBus::Event& a_event, std::string_view a_requestId,
@@ -808,7 +808,7 @@ namespace dvb::tools::capture
 			const auto golden = a_args.find("golden");
 			if (golden == a_args.end())
 				return;
-			fs::path goldenPath(golden->get<std::string>());
+			fs::path goldenPath = PathFromUtf8(golden->get<std::string>());
 			if (goldenPath.is_relative())
 				goldenPath = a_backend.gameRoot() / goldenPath;
 			try
@@ -1110,7 +1110,7 @@ namespace dvb::tools::capture
 	CaptureConfiguration CaptureConfigurationFromConfig(const Config& a_config)
 	{
 		CaptureConfiguration configuration{
-			.captureDirectory = fs::path(a_config.captureDir),
+			.captureDirectory = PathFromUtf8(a_config.captureDir),
 			.timeout = milliseconds(a_config.captureTimeoutMs),
 			.settle = milliseconds(a_config.captureSettleMs),
 		};

@@ -94,6 +94,22 @@ TEST_CASE("recording storage confines paths and reports corrupt entries independ
 	CHECK(fs::exists(root.path / "corrupt.json"));
 }
 
+TEST_CASE("recording names with non-ASCII characters load by their listed name")
+{
+	TempDir      root{ "recording-utf8" };
+	RecordingStore store(root.path);
+	{
+		std::ofstream out(root.path / fs::path(u8"Rán.json"), std::ios::binary);
+		out << RecordingDocument().dump();
+	}
+
+	const auto list = store.List();
+	CHECK(list.at("count") == 1);
+	const auto& entry = list.at("recordings").at(0);
+	CHECK(!entry.contains("error"));
+	CHECK_NOTHROW(store.Load(entry.at("file").get<std::string>()));
+}
+
 TEST_CASE("foreign recording capabilities require an explicit downgrade")
 {
 	auto foreign = RecordingDocument();

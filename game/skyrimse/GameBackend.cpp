@@ -2,6 +2,7 @@
 
 #include "Lifecycle.h"
 #include "MainThread.h"
+#include "io/PathText.h"
 #include "save/SkyrimCalendar.h"
 #include "save/SkyrimSaveHeader.h"
 
@@ -82,8 +83,8 @@ namespace dvb::skyrimse
 		tools::GameSaveList EnumerateSaves(tools::GameSaveListRequest a_request)
 		{
 			const fs::path directory = a_request.directory ?
-			                               fs::path(*a_request.directory) :
-			                               fs::path(ResolveSaveDirectory());
+			                               PathFromUtf8(*a_request.directory) :
+			                               PathFromUtf8(ResolveSaveDirectory());
 			std::error_code ec;
 			fs::directory_iterator it(directory, ec);
 			if (ec)
@@ -143,7 +144,7 @@ namespace dvb::skyrimse
 			const std::string& a_directory, const std::string& a_name)
 		{
 			return save::ReadSkyrimSaveHeader(
-				fs::path(a_directory) / (a_name + ".ess"));
+				PathFromUtf8(a_directory) / PathFromUtf8(a_name + ".ess"));
 		}
 
 		bool SameDirectory(const fs::path& a_left, const fs::path& a_right)
@@ -180,7 +181,7 @@ namespace dvb::skyrimse
 		{
 			const fs::path nativeDirectory{ ResolveSaveDirectory() };
 			if (a_requestedDirectory &&
-				!SameDirectory(nativeDirectory, fs::path(*a_requestedDirectory)))
+				!SameDirectory(nativeDirectory, PathFromUtf8(*a_requestedDirectory)))
 				throw ToolError(409, std::format(
 										 "directory '{}' is read-only selection and does not match Skyrim's native save directory '{}'",
 										 *a_requestedDirectory, Utf8(nativeDirectory)));
@@ -333,7 +334,7 @@ namespace dvb::skyrimse
 
 			const fs::path nativeDirectory{ ResolveSaveDirectoryOnMainThread() };
 			if (a_request.directory &&
-				!SameDirectory(nativeDirectory, fs::path(*a_request.directory)))
+				!SameDirectory(nativeDirectory, PathFromUtf8(*a_request.directory)))
 				return {
 					.accepted = false,
 					.errorCode = 409,

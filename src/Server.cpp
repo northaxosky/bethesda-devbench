@@ -9,6 +9,7 @@
 #include "RuntimeProtocol.h"
 #include "RuntimeContext.h"
 #include "Version.h"
+#include "io/PathText.h"
 #include "io/WindowsPaths.h"
 #include "waits/AwaitService.h"
 
@@ -354,7 +355,7 @@ namespace dvb
 		if (dir.empty() || a_file.empty())
 			return;
 		std::error_code             ec;
-		const std::filesystem::path abs = std::filesystem::absolute(std::filesystem::path(dir) / a_file, ec);
+		const std::filesystem::path abs = std::filesystem::absolute(dvb::PathFromUtf8(dir) / dvb::PathFromUtf8(a_file), ec);
 		const std::wstring          args = L"/select,\"" + abs.wstring() + L"\"";
 		::ShellExecuteW(nullptr, nullptr, L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
 	}

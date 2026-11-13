@@ -2,6 +2,7 @@
 
 #include "Lifecycle.h"
 #include "MainThread.h"
+#include "io/PathText.h"
 #include "game/fallout4/data/Fallout4Calendar.h"
 #include "game/fallout4/data/Fallout4SaveHeader.h"
 
@@ -84,7 +85,7 @@ namespace dvb::fallout4
 		tools::GameSaveList EnumerateSaves(tools::GameSaveListRequest a_request)
 		{
 			const fs::path         directory = a_request.directory ?
-			                                       fs::path(*a_request.directory) :
+			                                       PathFromUtf8(*a_request.directory) :
 			                                       fs::path(ResolveSaveDirectory());
 			std::error_code        ec;
 			fs::directory_iterator it(directory, ec);
@@ -150,7 +151,7 @@ namespace dvb::fallout4
 			const std::string& a_directory, const std::string& a_name)
 		{
 			return tools::game::ReadFallout4SaveHeader(
-				fs::path(a_directory) / (a_name + ".fos"));
+				PathFromUtf8(a_directory) / PathFromUtf8(a_name + ".fos"));
 		}
 
 		fs::path NativeSaveDirectory(RE::BGSSaveLoadManager& a_manager)
@@ -197,7 +198,7 @@ namespace dvb::fallout4
 		{
 			const fs::path nativeDirectory{ ResolveSaveDirectory() };
 			if (a_requestedDirectory &&
-				!SameDirectory(nativeDirectory, fs::path(*a_requestedDirectory)))
+				!SameDirectory(nativeDirectory, PathFromUtf8(*a_requestedDirectory)))
 				throw ToolError(409, std::format(
 										 "directory '{}' is read-only selection and does not match Fallout 4's native save directory '{}'",
 										 *a_requestedDirectory, Utf8(nativeDirectory)));
@@ -407,7 +408,7 @@ namespace dvb::fallout4
 
 			const auto nativeDirectory = NativeSaveDirectory(*manager);
 			if (a_request.directory &&
-				!SameDirectory(nativeDirectory, fs::path(*a_request.directory)))
+				!SameDirectory(nativeDirectory, PathFromUtf8(*a_request.directory)))
 				return {
 					.accepted = false,
 					.errorCode = 409,
