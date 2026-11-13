@@ -179,15 +179,17 @@ export class RemoteClient {
   async callTool(
     name: string,
     args: JsonObject,
-    options: { mutation: boolean; timeoutMs?: number },
+    options: { mutation: boolean; timeoutMs?: number; internal?: boolean },
   ): Promise<{ identity: RuntimeIdentity; value: JsonValue }> {
     const resolved = await this.resolve();
+    // The bridge's own reads must not receive blockedBy/notices hints.
+    const body = options.internal ? { ...args, noNotices: true } : args;
     const value = await this.fetchJson(
       resolved.identity,
       `/api/tool/${encodeURIComponent(name)}`,
       {
         method: "POST",
-        body: args,
+        body,
         timeoutMs: options.timeoutMs ?? this.callTimeoutMs,
         mutation: options.mutation,
       },

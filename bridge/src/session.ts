@@ -1221,7 +1221,7 @@ async function mutate(
   args: JsonObject,
 ): Promise<JsonValue> {
   try {
-    return (await remote.callTool(name, args, { mutation: true })).value;
+    return (await remote.callTool(name, args, { mutation: true, internal: true })).value;
   } catch (error) {
     throw domainFailure(name, error);
   }

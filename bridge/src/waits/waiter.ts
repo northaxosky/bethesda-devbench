@@ -53,8 +53,13 @@ export async function awaitCondition(request: WaitRequest): Promise<WaitResult> 
       owned: request.owned,
       progress,
       readHealth: async () =>
-        (await remote.callTool("inspect", { kind: "health" }, { mutation: false }))
-          .value as JsonObject,
+        (
+          await remote.callTool(
+            "inspect",
+            { kind: "health" },
+            { mutation: false, internal: true },
+          )
+        ).value as JsonObject,
     });
     const active = signals;
     const satisfied = await active.guard(pump(active));

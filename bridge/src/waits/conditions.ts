@@ -48,7 +48,7 @@ export interface WaitCondition {
 export function readerFor(remote: RemoteClient): ConditionContext["read"] {
   return async (tool, args) => {
     try {
-      const { value } = await remote.callTool(tool, args, { mutation: false });
+      const { value } = await remote.callTool(tool, args, { mutation: false, internal: true });
       return { ok: true, value: requireObject(value, `${tool} response`) as JsonObject };
     } catch (error) {
       if (error instanceof RemoteDomainError && (error.status === 503 || error.status === 504)) {

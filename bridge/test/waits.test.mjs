@@ -128,6 +128,25 @@ test("a frames wait finishes when the game renders that many frames", async (t) 
   assert.equal(result.satisfied.endFrame - result.satisfied.startFrame >= 3, true);
 });
 
+test("the bridge's own reads opt out of reply hints but proxied calls do not", async (t) => {
+  const { fixture, server, remote } = await setup(t);
+  const pending = wait(remote, playerReady({ operationId: 31 }));
+  await server.nextHold();
+  server.game.op = { operationId: 31, phase: "succeeded", success: true, active: false };
+  server.game.playerLoaded = true;
+  server.publish("lifecycle", { event: "postLoadGame", success: true });
+  assert.equal((await pending).ok, true);
+  const internal = server.toolRequests.filter((call) => call.tool === "inspect");
+  assert.notEqual(internal.length, 0);
+  assert.equal(internal.every((call) => call.args.noNotices === true), true);
+
+  const proxy = proxyFor(fixture);
+  t.after(() => proxy.close());
+  await proxy.callTool("menu", { action: "list" });
+  const forwarded = server.toolRequests.findLast((call) => call.tool === "menu");
+  assert.equal("noNotices" in forwarded.args, false);
+});
+
 test("a foreground main-thread stall fails the wait with the health snapshot", async (t) => {
   const { server, remote } = await setup(t);
   const pending = wait(remote, eventOccurred({ topic: "never" }), {

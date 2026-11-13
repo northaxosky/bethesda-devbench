@@ -236,6 +236,7 @@ export async function startGameServer(fixture, options = {}) {
     loadCalls: 0,
     scenarioRunCalls: 0,
     mutationCalls: [],
+    toolRequests: [],
     inspectStalls: options.inspectStalls ?? 0,
     tools: [],
   };
@@ -335,6 +336,7 @@ export async function startGameServer(fixture, options = {}) {
   });
 
   function handleTool(tool, args, request, response) {
+    state.toolRequests.push({ tool, args });
     if (tool === "game" && args.action === "status") {
       return json(response, {
         actionsAllowed: options.actionsAllowed ?? true,
