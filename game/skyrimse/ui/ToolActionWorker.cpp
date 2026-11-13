@@ -23,7 +23,7 @@ namespace dvb::skyrimse::ui
 		std::condition_variable g_cv;
 		std::deque<Request>     g_queue;
 		ToolRegistry*           g_registry = nullptr;
-		// Never destroyed: a static jthread would join at DLL detach, after the OS killed it.
+		// Leaked so DLL detach never joins a thread the OS already killed.
 		std::jthread& g_worker = *new std::jthread;
 
 		void Worker(std::stop_token a_stop)

@@ -1,4 +1,4 @@
-// Engine text that is not UTF-8 made dump() throw, so the whole REST reply was an empty 500.
+// Non-UTF-8 engine text made dump() throw: an empty REST 500.
 
 #include "test_framework.h"
 
