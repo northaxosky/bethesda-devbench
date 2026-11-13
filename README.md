@@ -105,7 +105,7 @@ ceiling is only a last resort. Event feeds are `GET /api/await/events` and
 
 ## Source
 
-`shared` retains the upstream v1.17.0 (`afd0f3d`) shared sources unchanged.
+`shared` retains the upstream v1.36.0 (`cb0c0a9`) shared sources unchanged.
 The shared host and tools live in `src`, native implementations in
 `game\fallout4` and `game\skyrimse`, and the external controller in `bridge`.
 The plugin is [GPL-3.0](COPYING) with upstream's [modding and linking exceptions](EXCEPTIONS).

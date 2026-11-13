@@ -16,6 +16,7 @@ namespace dvb
 		std::filesystem::path             pluginPath;
 		std::function<int()>              currentFrame;
 		std::function<bool(std::function<void()>)> enqueueTask;
+		std::function<bool(std::function<void()>)> enqueueUiTask;  // optional; kUi falls back to enqueueTask
 	};
 
 	RuntimeContext MakeRuntimeContext(

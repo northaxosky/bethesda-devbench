@@ -18,10 +18,12 @@ namespace
 
 namespace dvb::MainThread
 {
-	json RunAndWait(std::function<json()> a_fn, std::chrono::milliseconds a_timeout, const std::atomic<bool>* a_keepWaiting)
+	json RunAndWait(std::function<json()> a_fn, std::chrono::milliseconds a_timeout, const std::atomic<bool>* a_keepWaiting, Queue a_queue)
 	{
 		const auto& runtime = GetRuntimeContext();
-		if (!runtime.enqueueTask)
+		const auto& enqueue =
+			a_queue == Queue::kUi && runtime.enqueueUiTask ? runtime.enqueueUiTask : runtime.enqueueTask;
+		if (!enqueue)
 			throw ToolError(
 				500, std::format("{} TaskInterface unavailable", runtime.profile.extenderName));
 		if (a_keepWaiting && !a_keepWaiting->load(std::memory_order_relaxed))
@@ -31,21 +33,27 @@ namespace dvb::MainThread
 		auto       invocation = std::make_shared<QueuedTask>(std::move(a_fn), deadline);
 		auto       future = invocation->GetFuture();
 
-		g_pendingTasks.fetch_add(1, std::memory_order_relaxed);
-		const bool queued = runtime.enqueueTask([invocation]() {
+		const bool countsTowardHealth = a_queue == Queue::kMain;
+		if (countsTowardHealth)
+			g_pendingTasks.fetch_add(1, std::memory_order_relaxed);
+		const bool queued = enqueue([invocation, countsTowardHealth]() {
 			struct Finally
 			{
+				bool countsTowardHealth;
 				~Finally()
 				{
+					if (!countsTowardHealth)
+						return;
 					g_lastTaskFrame.store(game::CurrentFrame(), std::memory_order_relaxed);
 					g_pendingTasks.fetch_sub(1, std::memory_order_relaxed);
 				}
-			} finally;
+			} finally{ countsTowardHealth };
 			invocation->Run();
 		});
 		if (!queued)
 		{
-			g_pendingTasks.fetch_sub(1, std::memory_order_relaxed);
+			if (countsTowardHealth)
+				g_pendingTasks.fetch_sub(1, std::memory_order_relaxed);
 			invocation->Abandon();
 			throw ToolError(
 				503, std::format("{} task enqueue failed", runtime.profile.extenderName));
@@ -73,19 +81,19 @@ namespace dvb::MainThread
 			if (future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
 				return future.get();
 			if (!abandoned)
-				throw ToolError(504, std::format(
+				throw TaskTimeout(true, std::format(
 					"main-thread task did not finish within {}ms; it already started and may still complete",
 					a_timeout.count()));
 			const int frameNow = game::CurrentFrame();
 			if (frameAtStart < 0 || frameNow < 0)
-				throw ToolError(504, std::format(
+				throw TaskTimeout(false, std::format(
 					"main-thread task did not start within {}ms; queued task abandoned",
 					a_timeout.count()));
 			if (frameNow == frameAtStart)
-				throw ToolError(504, std::format(
+				throw TaskTimeout(false, std::format(
 					"main-thread task did not start within {}ms; queued task abandoned and the game frame counter has not advanced -- main thread hung or the game is fully paused; if no pause menu is open, only a process restart recovers",
 					a_timeout.count()));
-			throw ToolError(504, std::format(
+			throw TaskTimeout(false, std::format(
 				"main-thread task did not start within {}ms; queued task abandoned ({} frames elapsed -- main thread busy)",
 				a_timeout.count(), frameNow - frameAtStart));
 		}
