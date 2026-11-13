@@ -65,6 +65,7 @@ namespace dvb::fallout4
 				       state.postLoadSucceeded != false;
 			},
 			.openMenus = [] { return Lifecycle::GetSnapshot().openMenus; },
+			.timeScale = [] { return RE::BSTimer::QGlobalTimeMultiplier(); },
 			.onStarted =
 				[](ToolRegistry&, EventBus&, const Config& a_config) {
 					WindowFocus::Configure(a_config);

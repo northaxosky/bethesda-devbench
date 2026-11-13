@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -22,7 +23,8 @@ namespace dvb
 		};
 
 		// Wire the host interface to the registry + bus before consumers request it.
-		void Init(ToolRegistry& a_registry, EventBus& a_events);
+		// a_timeScale reads the live global time multiplier (empty reads as 1.0).
+		void Init(ToolRegistry& a_registry, EventBus& a_events, std::function<float()> a_timeScale = {});
 		void Reset();
 
 		// Handle a DevBenchMessage::kMessage_GetInterface request. Native adapters

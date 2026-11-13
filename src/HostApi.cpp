@@ -6,6 +6,7 @@
 #include "GameState.h"
 #include "Json.h"
 #include "Log.h"
+#include "Notices.h"
 #include "ToolExtensions.h"
 #include "ToolRegistry.h"
 #include "tools/PingTool.h"
@@ -19,6 +20,7 @@ namespace dvb::HostApi
 	{
 		ToolRegistry* g_registry = nullptr;
 		EventBus*     g_events = nullptr;
+		std::function<float()> g_timeScale;
 
 		// Registrant ledger: who asked for the C-ABI interface, and what they registered
 		// through it. Both grow only (append-only, process lifetime) — a plugin unregistering
@@ -159,6 +161,33 @@ namespace dvb::HostApi
 				}
 				g_events->Publish(a_topic, std::move(payload));
 			}
+
+			// Time-scale leases are not ported; refuse rather than pretend to apply.
+			bool SetTimeScale(float, std::uint32_t, const char*) override
+			{
+				return false;
+			}
+
+			float GetTimeScale() override
+			{
+				return g_timeScale ? g_timeScale() : 1.0f;
+			}
+
+			bool PostNotice(const char* a_key, const char* a_source, const char* a_severity, const char* a_text, std::uint32_t a_ttlMs) override
+			{
+				if (!a_key || !*a_key || !a_text || !*a_text)
+					return false;
+				Notices::Severity severity = Notices::Severity::kInfo;
+				if (a_severity)
+					(void)Notices::ParseSeverity(a_severity, severity);
+				Notices::Global().Post(a_key, a_source && *a_source ? a_source : "plugin", severity, a_text, a_ttlMs, Notices::NowMs());
+				return true;
+			}
+
+			bool ClearNotice(const char* a_key) override
+			{
+				return a_key && Notices::Global().Clear(a_key);
+			}
 		};
 
 		Interface g_interface;
@@ -188,10 +217,11 @@ namespace dvb::HostApi
 
 	}
 
-	void Init(ToolRegistry& a_registry, EventBus& a_events)
+	void Init(ToolRegistry& a_registry, EventBus& a_events, std::function<float()> a_timeScale)
 	{
 		g_registry = &a_registry;
 		g_events = &a_events;
+		g_timeScale = std::move(a_timeScale);
 		RegisterSelfTest();
 	}
 
@@ -199,6 +229,7 @@ namespace dvb::HostApi
 	{
 		g_registry = nullptr;
 		g_events = nullptr;
+		g_timeScale = {};
 	}
 
 	void OnInterfaceRequest(const Message& a_message)

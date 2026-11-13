@@ -50,6 +50,7 @@ namespace dvb
 		std::function<void()>          resetLifecycle;
 		std::function<bool()>          ready;
 		std::function<std::vector<std::string>()> openMenus;
+		std::function<float()> timeScale;  // optional: live global time multiplier
 		std::function<void(
 			ToolRegistry&, EventBus&, const Config&)> onStarted;
 		std::function<void()> shutdown;

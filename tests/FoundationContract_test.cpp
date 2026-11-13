@@ -17,6 +17,10 @@ TEST_CASE("host API compatibility remains independent from the package version")
 	CHECK(metadata.at("packageVersion") == "0.1.0");
 	CHECK(metadata.at("hostApi").at("implementedCompatibilityFloor") >= 10400);
 	CHECK(metadata.at("hostApi").at("implementedCompatibilityFloor") >= 10500);
+	CHECK(metadata.at("hostApi").at("implementedCompatibilityFloor") >=
+		  DevBenchAPI::kTimeScaleCompatibility);
+	CHECK(metadata.at("hostApi").at("implementedCompatibilityFloor") ==
+		  DevBenchAPI::kNoticeCompatibility);
 	CHECK(metadata.at("hostApi").at("implementedCompatibilityFloor") != 100);
 	CHECK(metadata.at("upstreamBaseline").at("version") == "1.18.2");
 	CHECK(metadata.at("upstreamBaseline").at("commit") ==

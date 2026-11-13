@@ -3,6 +3,7 @@
 #include "GameState.h"
 #include "HostApi.h"
 #include "Log.h"
+#include "NoticeAnnotator.h"
 #include "RuntimePaths.h"
 #include "Server.h"
 #include "ToolExtensions.h"
@@ -127,7 +128,9 @@ namespace dvb
 			std::make_unique<Runtime>(std::move(a_adapter), std::move(config));
 		auto& server = runtime->server;
 		server.Events().SetFrameProvider(&game::CurrentFrame);
-		HostApi::Init(server.Tools(), server.Events());
+		HostApi::Init(
+			server.Tools(), server.Events(), runtime->adapter.timeScale);
+		Notices::AttachToReplies(server.Tools());
 
 		auto console = runtime->adapter.console(server.Events());
 		runtime->consoleLifetime = std::move(console.lifetime);

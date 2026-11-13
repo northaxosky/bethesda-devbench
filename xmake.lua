@@ -355,6 +355,7 @@ target("devbench-tests", function()
         "tests/CaptureTool_test.cpp",
         "tests/RestTool_test.cpp",
         "tests/Json_test.cpp",
+        "tests/Notices_test.cpp",
         "game/fallout4/data/Fallout4Calendar.cpp",
         "game/fallout4/data/Fallout4SaveHeader.cpp",
         "game/skyrimse/save/SkyrimCalendar.cpp",

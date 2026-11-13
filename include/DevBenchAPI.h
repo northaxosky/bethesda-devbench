@@ -87,6 +87,27 @@ namespace DevBenchAPI
 		// GetBuildNumber() >= kToolExtensionCompatibility.
 		virtual bool RegisterToolExtension(const char* a_baseTool, const char* a_key,
 			const char* a_descriptorJson, ToolFn a_handler, void* a_ctx) = 0;
+
+		// Set the game's global time scale (0.1..3.0), restored after a_leaseMs (0 = 60000).
+		// Non-blocking, any thread; applied on a later main-thread frame. Returns false when the
+		// scale is out of range or a recording/capture would be made incomparable. a_owner names
+		// the lease (nullptr = anonymous). ABI: call only when GetBuildNumber() >= 12000
+		// (kTimeScaleCompatibility).
+		virtual bool SetTimeScale(float a_scale, std::uint32_t a_leaseMs, const char* a_owner) = 0;
+
+		// The global time multiplier the game is running at now; 1.0 when nothing changed it.
+		// ABI: appended after SetTimeScale; call only when GetBuildNumber() >= 12000.
+		virtual float GetTimeScale() = 0;
+
+		// Post a message that every tool reply carries (a `notices` array) until cleared or
+		// a_ttlMs elapses (0 = until cleared). A repeated a_key replaces it; a_severity is
+		// "info", "warning" or "critical" (else "info"). Returns false for an empty key or text.
+		// ABI: call only when GetBuildNumber() >= 13400 (kNoticeCompatibility).
+		virtual bool PostNotice(const char* a_key, const char* a_source, const char* a_severity, const char* a_text, std::uint32_t a_ttlMs) = 0;
+
+		// Remove the notice with a_key. Returns false if there was none.
+		// ABI: appended after PostNotice; call only when GetBuildNumber() >= 13400.
+		virtual bool ClearNotice(const char* a_key) = 0;
 	};
 }
 
