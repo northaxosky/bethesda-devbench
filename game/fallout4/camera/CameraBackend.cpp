@@ -3,6 +3,7 @@
 #include "MainThread.h"
 #include "game/fallout4/LivePlayer.h"
 #include "game/fallout4/Runtime.h"
+#include "game/fallout4/inspection/Form.h"
 #include "tools/camera/MutationDispatch.h"
 
 namespace dvb::fallout4
@@ -173,6 +174,47 @@ namespace dvb::fallout4
 				!RE::PlayerControls::GetSingleton())
 				throw ToolError(422,
 					"free camera requires a loaded scene, a registered camera state, and player controls");
+		}
+
+		tools::CameraFrameTarget ReadFrameTarget(std::string_view a_identifier)
+		{
+			const auto result = MainThread::RunAndWait(
+				[identifier = std::string(a_identifier)]() -> json {
+					if (!ReadLivePlayer().readiness.loaded)
+						throw ToolError(422, "camera frame requires a loaded scene");
+					auto* form = inspection::ResolveForm(identifier);
+					if (!form)
+						throw ToolError(
+							404, std::format("camera frame: form '{}' not found", identifier));
+					auto* reference = form->As<RE::TESObjectREFR>();
+					if (!reference)
+						throw ToolError(422,
+							std::format(
+								"camera frame: '{}' is not a placed reference", identifier));
+					const auto position = reference->GetPosition();
+					const auto boundMin = reference->GetBoundMin();
+					const auto boundMax = reference->GetBoundMax();
+					return json{
+						{ "x", position.x },
+						{ "y", position.y },
+						{ "z", position.z },
+						{ "heading", reference->data.angle.z },
+						{ "boundMinZ", boundMin.z },
+						{ "boundMaxZ", boundMax.z },
+						{ "identity", inspection::SerializeForm(reference) },
+					};
+				});
+			return tools::CameraFrameTarget{
+				.place = {
+					.x = result.at("x").get<double>(),
+					.y = result.at("y").get<double>(),
+					.z = result.at("z").get<double>(),
+					.heading = result.at("heading").get<double>(),
+					.boundMinZ = result.at("boundMinZ").get<double>(),
+					.boundMaxZ = result.at("boundMaxZ").get<double>(),
+				},
+				.identity = result.at("identity"),
+			};
 		}
 
 		void ApplyPov(RE::PlayerCamera& a_camera, tools::CameraPov a_pov)
@@ -356,6 +398,9 @@ namespace dvb::fallout4
 							return result;
 						});
 				},
+			.resolveFrameTarget = [](std::string_view a_identifier) {
+				RequireSupportedRuntime(kFeature);
+				return ReadFrameTarget(a_identifier); },
 		};
 	}
 }

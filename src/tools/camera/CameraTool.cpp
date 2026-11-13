@@ -122,6 +122,77 @@ namespace dvb::tools
 			return a_backend.get();
 		}
 
+		std::optional<double> ReadOptionalNumber(const json& a_args, std::string_view a_name)
+		{
+			const auto it = a_args.find(a_name);
+			if (it == a_args.end())
+				return std::nullopt;
+			if (!it->is_number() || !std::isfinite(it->get<double>()))
+				throw ToolError(
+					400, std::format("camera frame '{}' must be a finite number", a_name));
+			return it->get<double>();
+		}
+
+		json HandleFrame(const json& a_args, const CameraBackend& a_backend)
+		{
+			ValidateOnly(a_args,
+				{ "action", "formId", "side", "aroundDeg", "distance", "distanceScale",
+					"eyeHeight", "pitchDeg" });
+			const auto target = ReadString(a_args, "formId", true);
+			if (target.empty())
+				throw ToolError(400, "camera frame requires a non-empty 'formId'");
+			const auto sideName = ReadString(a_args, "side", false, "front");
+			const auto side = CameraFrame::ParseSide(sideName);
+			if (!side)
+				throw ToolError(400,
+					"camera frame 'side' must be front | back | left | right | top | bottom");
+
+			CameraFrame::Options options;
+			options.side = *side;
+			if (const auto v = ReadOptionalNumber(a_args, "aroundDeg"))
+				options.aroundRad = *v * CameraFrame::kDegToRad;
+			if (const auto v = ReadOptionalNumber(a_args, "distance"))
+				options.distance = *v;
+			if (const auto v = ReadOptionalNumber(a_args, "distanceScale"))
+				options.distanceScale = *v;
+			if (const auto v = ReadOptionalNumber(a_args, "eyeHeight"))
+				options.eyeFraction = *v;
+			if (const auto v = ReadOptionalNumber(a_args, "pitchDeg"))
+				options.pitchRad = *v * CameraFrame::kDegToRad;
+			if (const auto problem = CameraFrame::Validate(options))
+				throw ToolError(400, std::format("camera frame {}", *problem));
+
+			const auto state = ReadSnapshot(a_backend);
+			if (!state.freeCam)
+				throw ToolError(409, "camera frame requires active free-camera mode");
+			if (!state.freeCamOwned)
+				throw ToolError(409,
+					"camera frame refuses a free-camera mode not owned by DevBench");
+			if (!a_backend.resolveFrameTarget || !a_backend.drive)
+				throw ToolError(503, "camera framing is unavailable");
+
+			const auto resolved = a_backend.resolveFrameTarget(target);
+			const auto pose = CameraFrame::Frame(resolved.place, options);
+			auto       result = a_backend.drive(CameraDriveRequest{
+					  .x = static_cast<float>(pose.x),
+					  .y = static_cast<float>(pose.y),
+					  .z = static_cast<float>(pose.z),
+					  .pitch = static_cast<float>(pose.pitch),
+					  .yaw = static_cast<float>(pose.yaw),
+			});
+			result["action"] = "frame";
+			result["side"] = sideName;
+			result["target"] = resolved.identity;
+			result["pose"] = json{
+				{ "x", pose.x },
+				{ "y", pose.y },
+				{ "z", pose.z },
+				{ "pitch", pose.pitch },
+				{ "yaw", pose.yaw },
+			};
+			return result;
+		}
+
 		json HandleCamera(
 			const json& a_args, bool a_allowControlActions, const CameraBackend& a_backend)
 		{
@@ -180,9 +251,12 @@ namespace dvb::tools
 				return a_backend.drive(request);
 			}
 
+			if (action == "frame")
+				return HandleFrame(a_args, a_backend);
+
 			throw ToolError(400,
 				std::format(
-					"unknown camera action '{}' (get|setPov|freecam|drive)", action));
+					"unknown camera action '{}' (get|setPov|freecam|drive|frame)", action));
 		}
 	}
 
@@ -252,12 +326,19 @@ namespace dvb::tools
 			"freecam enters/exits the native free-camera stack without freezing time, but only "
 			"exits a mode entered by DevBench. drive requires DevBench-owned free camera and "
 			"sets an absolute world-unit position plus pitch/yaw radians; angles are normalized "
-			"before dispatch. Mutations require allowControlActions=true. A mutation that starts "
+			"before dispatch. frame (formId of a placed reference; optional side front (default)|back|left|right|top|bottom, "
+			"aroundDeg, distance, distanceScale, eyeHeight, pitchDeg) drives the already-owned free camera to look at "
+			"that reference from one side and returns { side, target, pose: { x, y, z, pitch, yaw } }. front/back/left/right "
+			"are relative to the reference's own heading (inspect refs rotation.z) with right on its clockwise side; top looks "
+			"straight down with the image's up being its front, bottom straight up. The camera sits 1.4 x the reference's "
+			"height away (distanceScale scales that, distance sets units) at eyeHeight (default 0.85) of its height; aroundDeg "
+			"replaces the side's horizontal angle; pitchDeg tilts, positive looks down. A reference without bounds is framed as "
+			"a 128-unit-tall target. Mutations require allowControlActions=true. A mutation that starts "
 			"but misses its acknowledgement deadline has an uncertain outcome and must not be retried.";
 		descriptor.inputSchema = json{
 			{ "type", "object" },
 			{ "properties", json{
-								{ "action", json{ { "type", "string" }, { "enum", json::array({ "get", "setPov", "freecam", "drive" }) }, { "default", "get" } } },
+								{ "action", json{ { "type", "string" }, { "enum", json::array({ "get", "setPov", "freecam", "drive", "frame" }) }, { "default", "get" } } },
 								{ "pov", json{ { "type", "string" }, { "enum", json::array({ "first", "third", "vanity" }) }, { "description", "setPov target" } } },
 								{ "on", json{ { "type", "boolean" }, { "default", true }, { "description", "freecam target state" } } },
 								{ "x", json{ { "type", "number" }, { "description", "drive world X in Fallout units" } } },
@@ -265,6 +346,13 @@ namespace dvb::tools
 								{ "z", json{ { "type", "number" }, { "description", "drive world Z in Fallout units" } } },
 								{ "pitch", json{ { "type", "number" }, { "description", "drive pitch in radians" } } },
 								{ "yaw", json{ { "type", "number" }, { "description", "drive yaw/heading in radians" } } },
+								{ "formId", json{ { "type", "string" }, { "description", "frame: placed reference to look at (0x-prefixed/bare hexadecimal FormID or EditorID)" } } },
+								{ "side", json{ { "type", "string" }, { "enum", json::array({ "front", "back", "left", "right", "top", "bottom" }) }, { "default", "front" }, { "description", "frame: side to look from, relative to the reference's heading" } } },
+								{ "aroundDeg", json{ { "type", "number" }, { "description", "frame: degrees clockwise from the reference's front, replacing the side's horizontal angle" } } },
+								{ "distance", json{ { "type", "number" }, { "exclusiveMinimum", 0 }, { "maximum", CameraFrame::kMaxDistance }, { "description", "frame: camera distance in world units (default 1.4 x the reference's height)" } } },
+								{ "distanceScale", json{ { "type", "number" }, { "exclusiveMinimum", 0 }, { "maximum", CameraFrame::kMaxDistanceScale }, { "description", "frame: multiplier on the default distance (default 1)" } } },
+								{ "eyeHeight", json{ { "type", "number" }, { "minimum", 0 }, { "maximum", CameraFrame::kMaxEyeFraction }, { "description", "frame: camera height as a fraction of the reference's height (default 0.85)" } } },
+								{ "pitchDeg", json{ { "type", "number" }, { "minimum", -CameraFrame::kMaxPitchDeg }, { "maximum", CameraFrame::kMaxPitchDeg }, { "description", "frame: camera tilt in degrees, positive looks down (default 0; top and bottom use +-89)" } } },
 							} },
 			{ "additionalProperties", false },
 		};

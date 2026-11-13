@@ -1,12 +1,14 @@
 #pragma once
 
 #include "ToolRegistry.h"
+#include "tools/camera/CameraFrameLogic.h"
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace dvb::tools
@@ -41,6 +43,12 @@ namespace dvb::tools
 		float yaw = 0.0F;
 	};
 
+	struct CameraFrameTarget
+	{
+		CameraFrame::Target place;
+		json                identity;
+	};
+
 	enum class FreeCameraExitDecision
 	{
 		kAlreadyOff,
@@ -68,6 +76,8 @@ namespace dvb::tools
 		std::function<json(CameraPov)>                 setPov;
 		std::function<json(bool)>                      setFreeCamera;
 		std::function<json(const CameraDriveRequest&)> drive;
+		// Main-thread read of a placed reference's position, heading and bounds.
+		std::function<CameraFrameTarget(std::string_view)> resolveFrameTarget;
 	};
 
 	class CameraService final

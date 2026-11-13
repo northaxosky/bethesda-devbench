@@ -352,6 +352,7 @@ target("devbench-tests", function()
         "tests/SkyrimVRInputState_test.cpp",
         "tests/MenuTool_test.cpp",
         "tests/CameraTool_test.cpp",
+        "tests/CameraFrameLogic_test.cpp",
         "tests/CaptureTool_test.cpp",
         "tests/RestTool_test.cpp",
         "tests/Json_test.cpp",

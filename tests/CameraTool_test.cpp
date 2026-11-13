@@ -270,3 +270,44 @@ TEST_CASE("started main-thread mutations report uncertainty and are not retried"
 	worker.join();
 	CHECK(applied.load(std::memory_order_relaxed) == 1);
 }
+
+TEST_CASE("camera frame drives the owned free camera to the computed pose")
+{
+	dvb::tools::CameraSnapshot     state{ .freeCam = true, .freeCamOwned = true };
+	dvb::tools::CameraDriveRequest observed;
+	int                            drives = 0;
+	dvb::tools::CameraBackend      backend{
+		.get = [&] { return state; },
+		.drive = [&](const dvb::tools::CameraDriveRequest& a_request) {
+			observed = a_request;
+			++drives;
+			return json{ { "applied", true } }; },
+		.resolveFrameTarget = [](std::string_view) {
+			return dvb::tools::CameraFrameTarget{
+				.place = { .x = 100.0, .y = 200.0, .z = 10.0, .heading = 0.0, .boundMinZ = 0.0, .boundMaxZ = 100.0 },
+				.identity = json{ { "formId", 1 } },
+			}; },
+	};
+	ToolRegistry registry;
+	dvb::tools::RegisterCameraTool(registry, true, std::move(backend));
+
+	const auto result = Invoke(registry,
+		json{ { "action", "frame" }, { "formId", "0x1" }, { "side", "back" }, { "distance", 50 } });
+	CHECK(result.ok);
+	CHECK(drives == 1);
+	// Heading 0 faces +Y, so the back is south of the target, looking north.
+	CHECK(std::abs(observed.x - 100.0F) < 0.001F);
+	CHECK(std::abs(observed.y - 150.0F) < 0.001F);
+	CHECK(std::abs(observed.z - 95.0F) < 0.001F);
+	CHECK(std::abs(observed.yaw) < 0.001F);
+	CHECK(result.value.at("action") == "frame");
+	CHECK(result.value.at("side") == "back");
+
+	CHECK(Invoke(registry, json{ { "action", "frame" } }).errorCode == 400);
+	CHECK(Invoke(registry, json{ { "action", "frame" }, { "formId", "1" }, { "side", "above" } }).errorCode == 400);
+	state.freeCamOwned = false;
+	CHECK(Invoke(registry, json{ { "action", "frame" }, { "formId", "1" } }).errorCode == 409);
+	state.freeCam = false;
+	CHECK(Invoke(registry, json{ { "action", "frame" }, { "formId", "1" } }).errorCode == 409);
+	CHECK(drives == 1);
+}
