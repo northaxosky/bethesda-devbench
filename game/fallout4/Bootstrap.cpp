@@ -9,7 +9,8 @@
 
 namespace
 {
-	dvb::Host g_host;
+	// Never destroyed: DLL detach at exit runs after the OS killed our threads.
+	dvb::Host& g_host = *new dvb::Host;
 
 	void LogCallbackError(
 		std::string_view a_context, const char* a_detail = nullptr) noexcept

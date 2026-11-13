@@ -12,7 +12,8 @@
 
 namespace
 {
-	dvb::Host g_host;
+	// Never destroyed: DLL detach at exit runs after the OS killed our threads.
+	dvb::Host& g_host = *new dvb::Host;
 
 	void InitLogging()
 	{
