@@ -1,8 +1,6 @@
 #pragma once
 
-#include <functional>
-#include <string>
-#include <vector>
+#include "ModalLogic.h"
 
 namespace dvb
 {
@@ -10,15 +8,7 @@ namespace dvb
 
 	namespace Notices
 	{
-		// Where the annotator learns which menus are open. Runs on listener
-		// threads, so openMenus must be a lock-light snapshot, not a main-thread call.
-		struct ModalSource
-		{
-			std::function<std::vector<std::string>()> openMenus;
-			std::vector<std::string>                  nonBlockingMenus;
-		};
-
-		// Adds `notices`, and `blockedBy` when a ModalSource is given, to replies.
-		void AttachToReplies(ToolRegistry& a_registry, ModalSource a_modal = {});
+		// `blockedBy` is added only when a ModalSource is given.
+		void AttachToReplies(ToolRegistry& a_registry, Modal::ModalSource a_modal = {});
 	}
 }

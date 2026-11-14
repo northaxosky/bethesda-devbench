@@ -1,11 +1,10 @@
 #pragma once
 
 #include "EventBus.h"
-#include "NoticeAnnotator.h"
+#include "ModalLogic.h"
 
 namespace dvb::Modal
 {
-	// Publishes modal.blocked / modal.cleared from the game's `menu` events.
-	// Returns the subscription for the caller to Unsubscribe.
-	EventBus::SubId Watch(EventBus& a_events, Notices::ModalSource a_source);
+	// The caller unsubscribes the returned id.
+	EventBus::SubId Watch(EventBus& a_events, ModalSource a_source);
 }

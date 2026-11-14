@@ -4,7 +4,7 @@
 
 namespace dvb::Modal
 {
-	EventBus::SubId Watch(EventBus& a_events, Notices::ModalSource a_source)
+	EventBus::SubId Watch(EventBus& a_events, ModalSource a_source)
 	{
 		return a_events.Subscribe(
 			[&a_events, source = std::move(a_source)](const EventBus::Event& a_event) {

@@ -2,15 +2,21 @@
 
 #include <algorithm>
 #include <format>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-// Which open menus stop an agent from acting, and what to tell it to do about each.
-// Name-based so it never touches the main thread, which a pausing menu freezes.
-// Fork-owned: upstream's ModalLogic.h hardcodes Skyrim menu names.
+// Name-based: a pausing menu freezes the main thread.
 namespace dvb::Modal
 {
+	// Runs on listener threads, so openMenus must be a lock-light snapshot.
+	struct ModalSource
+	{
+		std::function<std::vector<std::string>()> openMenus;
+		std::vector<std::string>                  nonBlockingMenus;
+	};
+
 	struct Blocker
 	{
 		std::string name;
@@ -32,7 +38,7 @@ namespace dvb::Modal
 		if (a_name == kMessageBox)
 			return "menu action=describe to read it, then menu action=accept index=N (close does not dismiss a message box)";
 		if (a_name == "Loading Menu" || a_name == "LoadingMenu")
-			return "a load or door transition is in progress; poll menu action=list until it closes";
+			return "a load or door transition is in progress; wait for the modal.cleared event";
 		if (a_name == "MainMenu" || a_name == "Main Menu")
 			return "the game is at the main menu; load a save with game action=load or loadLast";
 		return std::format("menu action=close name=\"{}\"", a_name);

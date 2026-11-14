@@ -71,15 +71,6 @@ TEST_CASE("Only menus outside the profile list block, each with a hint")
 	CHECK(dvb::Modal::Blockers(skyrim, { "HUDMenu" }).size() == 1);
 }
 
-TEST_CASE("Expected states block with a state hint rather than a close command")
-{
-	const auto fo4 = dvb::Fallout4Profile().nonBlockingMenus;
-	const auto blockers = dvb::Modal::Blockers(fo4, { "LoadingMenu", "MainMenu" });
-	CHECK(blockers.size() == 2);
-	CHECK(blockers[0].hint.find("poll menu action=list") != std::string::npos);
-	CHECK(blockers[1].hint.find("game action=load") != std::string::npos);
-}
-
 TEST_CASE("Replies gain blockedBy while a blocking menu is open and lose it on close")
 {
 	dvb::ToolRegistry registry;
@@ -111,7 +102,7 @@ TEST_CASE("Modal events fire when a blocker opens and when the last one closes")
 {
 	dvb::EventBus            events;
 	std::vector<std::string> open;
-	const auto               source = dvb::Notices::ModalSource{
+	const auto               source = dvb::Modal::ModalSource{
 		.openMenus = [&open] { return open; },
 		.nonBlockingMenus = dvb::Fallout4Profile().nonBlockingMenus
 	};

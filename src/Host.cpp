@@ -140,7 +140,7 @@ namespace dvb
 		server.Events().SetFrameProvider(&game::CurrentFrame);
 		HostApi::Init(
 			server.Tools(), server.Events(), runtime->adapter.timeScale);
-		Notices::ModalSource modalSource{
+		Modal::ModalSource modalSource{
 			.openMenus = runtime->adapter.openMenus,
 			.nonBlockingMenus = runtime->adapter.profile.nonBlockingMenus,
 		};

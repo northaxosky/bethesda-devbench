@@ -10,7 +10,7 @@ namespace dvb::Notices
 {
 	namespace
 	{
-		ToolRegistry::Annotation Annotate(const ModalSource& a_modal)
+		ToolRegistry::Annotation Annotate(const Modal::ModalSource& a_modal)
 		{
 			ToolRegistry::Annotation out;
 			out.fields = json::object();
@@ -46,7 +46,7 @@ namespace dvb::Notices
 		}
 	}
 
-	void AttachToReplies(ToolRegistry& a_registry, ModalSource a_modal)
+	void AttachToReplies(ToolRegistry& a_registry, Modal::ModalSource a_modal)
 	{
 		a_registry.SetAnnotator(
 			[modal = std::move(a_modal)] { return Annotate(modal); });
