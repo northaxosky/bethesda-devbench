@@ -24,13 +24,7 @@ Use MCP tool discovery or `GET /api/tools` for arguments and capabilities.
 Replies may carry `blockedBy`, plugin or agent `notices` (omit both with `noNotices: true`),
 and `warnings` naming unknown top-level keys.
 
-While a blocking menu is open every reply carries `blockedBy`:
-`[{ "name": "MessageBoxMenu", "hint": "menu action=describe to read it, ..." }]`, and a failed call
-gets the same text appended to its error. `modal.blocked` and `modal.cleared` events fire on the
-event stream. Each game profile lists its always-open menus (Fallout 4: `HUDMenu`, `CursorMenu`,
-`Console`, `FaderMenu`); `MainMenu` and `LoadingMenu` are reported with a state hint. The `notice`
-tool posts a message every reply carries: `notice action=post key=... text=... severity=critical`
-(`info|warning|critical`, optional `source`, `ttlMs`), `action=clear key=...`, or `action=list`.
+Replies carry `blockedBy` (open blocking menus, each with a hint) while one is open; `modal.blocked`/`modal.cleared` events track them.
 
 Capture uses optional providers or an explicitly selected native screenshot
 fallback, which is inconclusive for visual assertions. No RenderDoc provider
@@ -84,9 +78,7 @@ denies foreground scheduling. Two startup options, both default on, fix this:
 game window is first visible; `disablePowerThrottling` opts the process out of
 EcoQoS. `inspect` `kind=state` reports `window`: `foreground` (live),
 `foregroundRequested`, `foregroundResult` (`ok|failed|pending|skipped`), and
-`powerThrottlingDisabled`. It also reports `alwaysActive`, the live `[General] bAlwaysActive`
-(`null` when absent). `game` `getAlwaysActive` / `setAlwaysActive enabled=<bool>` read or set it
-(the INI file is untouched; setting needs `allowGameActions`) and return `{alwaysActive, windowFocused}`.
+`powerThrottlingDisabled`. It also reports `alwaysActive` (live `bAlwaysActive`); `game getAlwaysActive|setAlwaysActive` read or set it.
 
 Use the companion for restart-surviving MCP, or connect directly to
 `http://127.0.0.1:<port>/mcp` (defaults: FO4 8930, Skyrim 8920, VR 8921).
