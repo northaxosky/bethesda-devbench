@@ -68,12 +68,12 @@
           "readOnly": false
         },
         {
-          "description": "Read game/devbench state. health is answered off the game thread and reports identity plus queued main-thread task health. state reports lifecycle, menu, and real player readiness. vm reports lock-protected Papyrus collection sizes and state. player reports native identity, equipment, and actor values. scene reports cell/worldspace/location/current scene, position, time, and weather. mods reports the final full/light load order after gameDataReady. inventory reads a player or container inventory; quests reads native journal objectives; effects reads an actor's active-effect list; refs resolves, selects, or enumerates loaded forms; registrants reports the existing HostApi consumer/registration ledger. extensions lists consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.",
+          "description": "Read game/devbench state. health is answered off the game thread and reports identity plus queued main-thread task health. state reports lifecycle, menu, and real player readiness. vm reports lock-protected Papyrus collection sizes and state. player reports native identity, equipment, and actor values. scene reports cell/worldspace/location/current scene, position, time, and weather. mods reports the final full/light load order after gameDataReady. inventory reads a player or container inventory; quests reads native journal objectives; effects reads an actor's active-effect list; refs resolves, selects, or enumerates loaded forms (optional model filter: base-object mesh path substring); lights reads the renderer's light lists (scope=scene, nearest the player first; radius and limit apply) or the NiLights under a reference's 3D (scope=ref, default the player, or formId/selected); registrants reports the existing HostApi consumer/registration ledger. extensions lists consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.",
           "inputSchema": {
             "additionalProperties": true,
             "properties": {
               "formId": {
-                "description": "inventory owner, effects actor, or refs form: 0x-prefixed/bare hexadecimal FormID or EditorID",
+                "description": "inventory owner, effects actor, or refs/lights form: 0x-prefixed/bare hexadecimal FormID or EditorID",
                 "type": "string"
               },
               "formType": {
@@ -93,6 +93,7 @@
                   "quests",
                   "effects",
                   "refs",
+                  "lights",
                   "registrants",
                   "extensions",
                   "saves",
@@ -107,13 +108,25 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "model": {
+                "description": "refs enumeration: keep refs whose base object's mesh path contains this substring (case-insensitive); matches statics and furniture, not actors",
+                "type": "string"
+              },
               "radius": {
-                "description": "refs enumeration radius from the player; 0 scans the loaded grid",
+                "description": "refs/lights-scene radius from the player; 0 scans the loaded grid or applies no limit",
                 "minimum": 0,
                 "type": "number"
               },
+              "scope": {
+                "description": "lights only: ref (default) reads one reference's 3D; scene lists the renderer's lights",
+                "enum": [
+                  "ref",
+                  "scene"
+                ],
+                "type": "string"
+              },
               "selected": {
-                "description": "refs only: use the console's current picked reference handle",
+                "description": "refs/lights: use the console's current picked reference handle",
                 "type": "boolean"
               }
             },
@@ -123,7 +136,7 @@
           "readOnly": true
         },
         {
-          "description": "Inspect save/load status, list Fallout 4 .fos saves with optional bounded save header metadata, queue a native save/load, or advance the native game calendar. Mutations require allowGameActions=true, serialize one in-flight operation, never overwrite an existing save, and return an actionCursor captured before native dispatch for lifecycle correlation. An explicit dir is read-only selection and must resolve to the native save directory for mutations. Loads never answer content-mismatch dialogs automatically; advanceTime is not wait or sleep.",
+          "description": "Inspect save/load status, list Fallout 4 .fos saves with optional bounded save header metadata, queue a native save/load, or advance the native game calendar. getAlwaysActive/setAlwaysActive (param enabled: boolean) read or set the engine's live [General] bAlwaysActive, which keeps the game running while its window is in the background; the INI file is not changed. Both return { alwaysActive (null when unavailable), windowFocused }. Mutations require allowGameActions=true, serialize one in-flight operation, never overwrite an existing save, and return an actionCursor captured before native dispatch for lifecycle correlation. An explicit dir is read-only selection and must resolve to the native save directory for mutations. Loads never answer content-mismatch dialogs automatically; advanceTime is not wait or sleep.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -135,7 +148,9 @@
                   "save",
                   "load",
                   "loadLast",
-                  "advanceTime"
+                  "advanceTime",
+                  "getAlwaysActive",
+                  "setAlwaysActive"
                 ],
                 "type": "string"
               },
@@ -148,6 +163,10 @@
                 "description": "list: read an explicit save directory; mutations may only name the native effective directory",
                 "maxLength": 32767,
                 "type": "string"
+              },
+              "enabled": {
+                "description": "setAlwaysActive: keep the game running while its window is in the background",
+                "type": "boolean"
               },
               "filter": {
                 "description": "list: case-insensitive basename substring",
@@ -228,6 +247,46 @@
           },
           "name": "mcp_bridge_setup",
           "readOnly": true
+        },
+        {
+          "description": "Post a message that every tool reply carries (a `notices` array, most severe first) until it is cleared or expires, so an agent or a headless script sees a critical condition on its very next call. action='post' takes key (a repeat replaces it), text, severity info|warning|critical, optional source and ttlMs (0 = until cleared); 'clear' takes key; 'list' returns the active notices. Replies also carry `blockedBy` while a blocking menu (a tutorial, a message box) is open; pass noNotices=true on any call to leave both out.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "list",
+                  "post",
+                  "clear"
+                ],
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "info",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ttlMs": {
+                "maximum": 86400000,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "name": "notice",
+          "readOnly": false
         },
         {
           "description": "Discover loaded native Papyrus script classes, describe actual VM function/property/struct type metadata, or dispatch one permission-gated global or bound-object call. Arguments are validated against exact VM metadata before dispatch. Supported values are Bool, Int, Float, String, form-backed objects, arrays, and typed native structs/struct arrays with recursively validated fields and explicit typed nulls. Var, unknown fields/types, raw VM pointers, and untyped JSON inference are rejected. A call timeout is not cancellation: an accepted latent call can complete later and is never retried.",
@@ -557,7 +616,7 @@
           "readOnly": false
         },
         {
-          "description": "Read or control the native player camera. get returns the live POV, state id, free-camera ownership, and available transform fields. setPov uses the adapter's normal first/third-person transitions and its native auto-vanity entry path. freecam enters/exits the native free-camera stack without freezing time, but only exits a mode entered by DevBench. drive requires DevBench-owned free camera and sets an absolute world-unit position plus pitch/yaw radians; angles are normalized before dispatch. Mutations require allowControlActions=true. A mutation that starts but misses its acknowledgement deadline has an uncertain outcome and must not be retried.",
+          "description": "Read or control the native player camera. get returns the live POV, state id, free-camera ownership, and available transform fields. setPov uses the adapter's normal first/third-person transitions and its native auto-vanity entry path. freecam enters/exits the native free-camera stack without freezing time, but only exits a mode entered by DevBench. drive requires DevBench-owned free camera and sets an absolute world-unit position plus pitch/yaw radians; angles are normalized before dispatch. frame (formId of a placed reference; optional side front (default)|back|left|right|top|bottom, aroundDeg, distance, distanceScale, eyeHeight, pitchDeg) drives the already-owned free camera to look at that reference from one side and returns { side, target, pose: { x, y, z, pitch, yaw } }. front/back/left/right are relative to the reference's own heading (inspect refs rotation.z) with right on its clockwise side; top looks straight down with the image's up being its front, bottom straight up. The camera sits 1.4 x the reference's height away (distanceScale scales that, distance sets units) at eyeHeight (default 0.85) of its height; aroundDeg replaces the side's horizontal angle; pitchDeg tilts, positive looks down. A reference without bounds is framed as a 128-unit-tall target. Mutations require allowControlActions=true. A mutation that starts but misses its acknowledgement deadline has an uncertain outcome and must not be retried.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -567,8 +626,35 @@
                   "get",
                   "setPov",
                   "freecam",
-                  "drive"
+                  "drive",
+                  "frame"
                 ],
+                "type": "string"
+              },
+              "aroundDeg": {
+                "description": "frame: degrees clockwise from the reference's front, replacing the side's horizontal angle",
+                "type": "number"
+              },
+              "distance": {
+                "description": "frame: camera distance in world units (default 1.4 x the reference's height)",
+                "exclusiveMinimum": 0,
+                "maximum": 100000.0,
+                "type": "number"
+              },
+              "distanceScale": {
+                "description": "frame: multiplier on the default distance (default 1)",
+                "exclusiveMinimum": 0,
+                "maximum": 1000.0,
+                "type": "number"
+              },
+              "eyeHeight": {
+                "description": "frame: camera height as a fraction of the reference's height (default 0.85)",
+                "maximum": 2.0,
+                "minimum": 0,
+                "type": "number"
+              },
+              "formId": {
+                "description": "frame: placed reference to look at (0x-prefixed/bare hexadecimal FormID or EditorID)",
                 "type": "string"
               },
               "on": {
@@ -580,12 +666,31 @@
                 "description": "drive pitch in radians",
                 "type": "number"
               },
+              "pitchDeg": {
+                "description": "frame: camera tilt in degrees, positive looks down (default 0; top and bottom use +-89)",
+                "maximum": 89.0,
+                "minimum": -89.0,
+                "type": "number"
+              },
               "pov": {
                 "description": "setPov target",
                 "enum": [
                   "first",
                   "third",
                   "vanity"
+                ],
+                "type": "string"
+              },
+              "side": {
+                "default": "front",
+                "description": "frame: side to look from, relative to the reference's heading",
+                "enum": [
+                  "front",
+                  "back",
+                  "left",
+                  "right",
+                  "top",
+                  "bottom"
                 ],
                 "type": "string"
               },
@@ -811,12 +916,12 @@
           "readOnly": false
         },
         {
-          "description": "Read game/devbench state. health is answered off the game thread and reports identity plus queued main-thread task health. state reports lifecycle, menu, and real player readiness. vm reports lock-protected Papyrus collection sizes and state. player reports native identity, equipment, and actor values. scene reports cell/worldspace/location/current scene, position, time, and weather. mods reports the final full/light load order after gameDataReady. inventory reads a player or container inventory; quests reads native journal objectives; effects reads an actor's active-effect list; refs resolves, selects, or enumerates loaded forms; registrants reports the existing HostApi consumer/registration ledger. extensions lists consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.",
+          "description": "Read game/devbench state. health is answered off the game thread and reports identity plus queued main-thread task health. state reports lifecycle, menu, and real player readiness. vm reports lock-protected Papyrus collection sizes and state. player reports native identity, equipment, and actor values. scene reports cell/worldspace/location/current scene, position, time, and weather. mods reports the final full/light load order after gameDataReady. inventory reads a player or container inventory; quests reads native journal objectives; effects reads an actor's active-effect list; refs resolves, selects, or enumerates loaded forms (optional model filter: base-object mesh path substring); lights reads the renderer's light lists (scope=scene, nearest the player first; radius and limit apply) or the NiLights under a reference's 3D (scope=ref, default the player, or formId/selected); registrants reports the existing HostApi consumer/registration ledger. extensions lists consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.",
           "inputSchema": {
             "additionalProperties": true,
             "properties": {
               "formId": {
-                "description": "inventory owner, effects actor, or refs form: 0x-prefixed/bare hexadecimal FormID or EditorID",
+                "description": "inventory owner, effects actor, or refs/lights form: 0x-prefixed/bare hexadecimal FormID or EditorID",
                 "type": "string"
               },
               "formType": {
@@ -836,6 +941,7 @@
                   "quests",
                   "effects",
                   "refs",
+                  "lights",
                   "registrants",
                   "extensions",
                   "saves",
@@ -850,13 +956,25 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "model": {
+                "description": "refs enumeration: keep refs whose base object's mesh path contains this substring (case-insensitive); matches statics and furniture, not actors",
+                "type": "string"
+              },
               "radius": {
-                "description": "refs enumeration radius from the player; 0 scans the loaded grid",
+                "description": "refs/lights-scene radius from the player; 0 scans the loaded grid or applies no limit",
                 "minimum": 0,
                 "type": "number"
               },
+              "scope": {
+                "description": "lights only: ref (default) reads one reference's 3D; scene lists the renderer's lights",
+                "enum": [
+                  "ref",
+                  "scene"
+                ],
+                "type": "string"
+              },
               "selected": {
-                "description": "refs only: use the console's current picked reference handle",
+                "description": "refs/lights: use the console's current picked reference handle",
                 "type": "boolean"
               }
             },
@@ -866,7 +984,7 @@
           "readOnly": true
         },
         {
-          "description": "Inspect save/load status, list Skyrim Special Edition .ess saves with optional bounded save header metadata, queue a native save/load, or advance the native game calendar. Mutations require allowGameActions=true, serialize one in-flight operation, never overwrite an existing save, and return an actionCursor captured before native dispatch for lifecycle correlation. An explicit dir is read-only selection and must resolve to the native save directory for mutations. Loads never answer content-mismatch dialogs automatically; advanceTime is not wait or sleep.",
+          "description": "Inspect save/load status, list Skyrim Special Edition .ess saves with optional bounded save header metadata, queue a native save/load, or advance the native game calendar. getAlwaysActive/setAlwaysActive (param enabled: boolean) read or set the engine's live [General] bAlwaysActive, which keeps the game running while its window is in the background; the INI file is not changed. Both return { alwaysActive (null when unavailable), windowFocused }. Mutations require allowGameActions=true, serialize one in-flight operation, never overwrite an existing save, and return an actionCursor captured before native dispatch for lifecycle correlation. An explicit dir is read-only selection and must resolve to the native save directory for mutations. Loads never answer content-mismatch dialogs automatically; advanceTime is not wait or sleep.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -878,7 +996,9 @@
                   "save",
                   "load",
                   "loadLast",
-                  "advanceTime"
+                  "advanceTime",
+                  "getAlwaysActive",
+                  "setAlwaysActive"
                 ],
                 "type": "string"
               },
@@ -891,6 +1011,10 @@
                 "description": "list: read an explicit save directory; mutations may only name the native effective directory",
                 "maxLength": 32767,
                 "type": "string"
+              },
+              "enabled": {
+                "description": "setAlwaysActive: keep the game running while its window is in the background",
+                "type": "boolean"
               },
               "filter": {
                 "description": "list: case-insensitive basename substring",
@@ -971,6 +1095,46 @@
           },
           "name": "mcp_bridge_setup",
           "readOnly": true
+        },
+        {
+          "description": "Post a message that every tool reply carries (a `notices` array, most severe first) until it is cleared or expires, so an agent or a headless script sees a critical condition on its very next call. action='post' takes key (a repeat replaces it), text, severity info|warning|critical, optional source and ttlMs (0 = until cleared); 'clear' takes key; 'list' returns the active notices. Replies also carry `blockedBy` while a blocking menu (a tutorial, a message box) is open; pass noNotices=true on any call to leave both out.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "list",
+                  "post",
+                  "clear"
+                ],
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "info",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ttlMs": {
+                "maximum": 86400000,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "name": "notice",
+          "readOnly": false
         },
         {
           "description": "Discover loaded native Papyrus script classes, describe actual VM function/property/struct type metadata, or dispatch one permission-gated global or bound-object call. Arguments are validated against exact VM metadata before dispatch. Supported values are Bool, Int, Float, String, form-backed objects, arrays, and typed native structs/struct arrays with recursively validated fields and explicit typed nulls. Var, unknown fields/types, raw VM pointers, and untyped JSON inference are rejected. A call timeout is not cancellation: an accepted latent call can complete later and is never retried.",
@@ -1300,7 +1464,7 @@
           "readOnly": false
         },
         {
-          "description": "Read or control the native player camera. get returns the live POV, state id, free-camera ownership, and available transform fields. setPov uses the adapter's normal first/third-person transitions and its native auto-vanity entry path. freecam enters/exits the native free-camera stack without freezing time, but only exits a mode entered by DevBench. drive requires DevBench-owned free camera and sets an absolute world-unit position plus pitch/yaw radians; angles are normalized before dispatch. Mutations require allowControlActions=true. A mutation that starts but misses its acknowledgement deadline has an uncertain outcome and must not be retried.",
+          "description": "Read or control the native player camera. get returns the live POV, state id, free-camera ownership, and available transform fields. setPov uses the adapter's normal first/third-person transitions and its native auto-vanity entry path. freecam enters/exits the native free-camera stack without freezing time, but only exits a mode entered by DevBench. drive requires DevBench-owned free camera and sets an absolute world-unit position plus pitch/yaw radians; angles are normalized before dispatch. frame (formId of a placed reference; optional side front (default)|back|left|right|top|bottom, aroundDeg, distance, distanceScale, eyeHeight, pitchDeg) drives the already-owned free camera to look at that reference from one side and returns { side, target, pose: { x, y, z, pitch, yaw } }. front/back/left/right are relative to the reference's own heading (inspect refs rotation.z) with right on its clockwise side; top looks straight down with the image's up being its front, bottom straight up. The camera sits 1.4 x the reference's height away (distanceScale scales that, distance sets units) at eyeHeight (default 0.85) of its height; aroundDeg replaces the side's horizontal angle; pitchDeg tilts, positive looks down. A reference without bounds is framed as a 128-unit-tall target. Mutations require allowControlActions=true. A mutation that starts but misses its acknowledgement deadline has an uncertain outcome and must not be retried.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -1310,8 +1474,35 @@
                   "get",
                   "setPov",
                   "freecam",
-                  "drive"
+                  "drive",
+                  "frame"
                 ],
+                "type": "string"
+              },
+              "aroundDeg": {
+                "description": "frame: degrees clockwise from the reference's front, replacing the side's horizontal angle",
+                "type": "number"
+              },
+              "distance": {
+                "description": "frame: camera distance in world units (default 1.4 x the reference's height)",
+                "exclusiveMinimum": 0,
+                "maximum": 100000.0,
+                "type": "number"
+              },
+              "distanceScale": {
+                "description": "frame: multiplier on the default distance (default 1)",
+                "exclusiveMinimum": 0,
+                "maximum": 1000.0,
+                "type": "number"
+              },
+              "eyeHeight": {
+                "description": "frame: camera height as a fraction of the reference's height (default 0.85)",
+                "maximum": 2.0,
+                "minimum": 0,
+                "type": "number"
+              },
+              "formId": {
+                "description": "frame: placed reference to look at (0x-prefixed/bare hexadecimal FormID or EditorID)",
                 "type": "string"
               },
               "on": {
@@ -1323,12 +1514,31 @@
                 "description": "drive pitch in radians",
                 "type": "number"
               },
+              "pitchDeg": {
+                "description": "frame: camera tilt in degrees, positive looks down (default 0; top and bottom use +-89)",
+                "maximum": 89.0,
+                "minimum": -89.0,
+                "type": "number"
+              },
               "pov": {
                 "description": "setPov target",
                 "enum": [
                   "first",
                   "third",
                   "vanity"
+                ],
+                "type": "string"
+              },
+              "side": {
+                "default": "front",
+                "description": "frame: side to look from, relative to the reference's heading",
+                "enum": [
+                  "front",
+                  "back",
+                  "left",
+                  "right",
+                  "top",
+                  "bottom"
                 ],
                 "type": "string"
               },
@@ -1553,12 +1763,12 @@
           "readOnly": false
         },
         {
-          "description": "Read game/devbench state. health is answered off the game thread and reports identity plus queued main-thread task health. state reports lifecycle, menu, and real player readiness. vm reports lock-protected Papyrus collection sizes and state. player reports native identity, equipment, and actor values. scene reports cell/worldspace/location/current scene, position, time, and weather. mods reports the final full/light load order after gameDataReady. inventory reads a player or container inventory; quests reads native journal objectives; effects reads an actor's active-effect list; refs resolves, selects, or enumerates loaded forms; registrants reports the existing HostApi consumer/registration ledger. extensions lists consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.",
+          "description": "Read game/devbench state. health is answered off the game thread and reports identity plus queued main-thread task health. state reports lifecycle, menu, and real player readiness. vm reports lock-protected Papyrus collection sizes and state. player reports native identity, equipment, and actor values. scene reports cell/worldspace/location/current scene, position, time, and weather. mods reports the final full/light load order after gameDataReady. inventory reads a player or container inventory; quests reads native journal objectives; effects reads an actor's active-effect list; refs resolves, selects, or enumerates loaded forms (optional model filter: base-object mesh path substring); lights reads the renderer's light lists (scope=scene, nearest the player first; radius and limit apply) or the NiLights under a reference's 3D (scope=ref, default the player, or formId/selected); registrants reports the existing HostApi consumer/registration ledger. extensions lists consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.",
           "inputSchema": {
             "additionalProperties": true,
             "properties": {
               "formId": {
-                "description": "inventory owner, effects actor, or refs form: 0x-prefixed/bare hexadecimal FormID or EditorID",
+                "description": "inventory owner, effects actor, or refs/lights form: 0x-prefixed/bare hexadecimal FormID or EditorID",
                 "type": "string"
               },
               "formType": {
@@ -1578,6 +1788,7 @@
                   "quests",
                   "effects",
                   "refs",
+                  "lights",
                   "registrants",
                   "extensions",
                   "saves",
@@ -1592,13 +1803,25 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "model": {
+                "description": "refs enumeration: keep refs whose base object's mesh path contains this substring (case-insensitive); matches statics and furniture, not actors",
+                "type": "string"
+              },
               "radius": {
-                "description": "refs enumeration radius from the player; 0 scans the loaded grid",
+                "description": "refs/lights-scene radius from the player; 0 scans the loaded grid or applies no limit",
                 "minimum": 0,
                 "type": "number"
               },
+              "scope": {
+                "description": "lights only: ref (default) reads one reference's 3D; scene lists the renderer's lights",
+                "enum": [
+                  "ref",
+                  "scene"
+                ],
+                "type": "string"
+              },
               "selected": {
-                "description": "refs only: use the console's current picked reference handle",
+                "description": "refs/lights: use the console's current picked reference handle",
                 "type": "boolean"
               }
             },
@@ -1608,7 +1831,7 @@
           "readOnly": true
         },
         {
-          "description": "Inspect save/load status, list Skyrim VR .ess saves with optional bounded save header metadata, queue a native save/load, or advance the native game calendar. Mutations require allowGameActions=true, serialize one in-flight operation, never overwrite an existing save, and return an actionCursor captured before native dispatch for lifecycle correlation. An explicit dir is read-only selection and must resolve to the native save directory for mutations. Loads never answer content-mismatch dialogs automatically; advanceTime is not wait or sleep.",
+          "description": "Inspect save/load status, list Skyrim VR .ess saves with optional bounded save header metadata, queue a native save/load, or advance the native game calendar. getAlwaysActive/setAlwaysActive (param enabled: boolean) read or set the engine's live [General] bAlwaysActive, which keeps the game running while its window is in the background; the INI file is not changed. Both return { alwaysActive (null when unavailable), windowFocused }. Mutations require allowGameActions=true, serialize one in-flight operation, never overwrite an existing save, and return an actionCursor captured before native dispatch for lifecycle correlation. An explicit dir is read-only selection and must resolve to the native save directory for mutations. Loads never answer content-mismatch dialogs automatically; advanceTime is not wait or sleep.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -1620,7 +1843,9 @@
                   "save",
                   "load",
                   "loadLast",
-                  "advanceTime"
+                  "advanceTime",
+                  "getAlwaysActive",
+                  "setAlwaysActive"
                 ],
                 "type": "string"
               },
@@ -1633,6 +1858,10 @@
                 "description": "list: read an explicit save directory; mutations may only name the native effective directory",
                 "maxLength": 32767,
                 "type": "string"
+              },
+              "enabled": {
+                "description": "setAlwaysActive: keep the game running while its window is in the background",
+                "type": "boolean"
               },
               "filter": {
                 "description": "list: case-insensitive basename substring",
@@ -1713,6 +1942,46 @@
           },
           "name": "mcp_bridge_setup",
           "readOnly": true
+        },
+        {
+          "description": "Post a message that every tool reply carries (a `notices` array, most severe first) until it is cleared or expires, so an agent or a headless script sees a critical condition on its very next call. action='post' takes key (a repeat replaces it), text, severity info|warning|critical, optional source and ttlMs (0 = until cleared); 'clear' takes key; 'list' returns the active notices. Replies also carry `blockedBy` while a blocking menu (a tutorial, a message box) is open; pass noNotices=true on any call to leave both out.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "list",
+                  "post",
+                  "clear"
+                ],
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "info",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ttlMs": {
+                "maximum": 86400000,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "name": "notice",
+          "readOnly": false
         },
         {
           "description": "Discover loaded native Papyrus script classes, describe actual VM function/property/struct type metadata, or dispatch one permission-gated global or bound-object call. Arguments are validated against exact VM metadata before dispatch. Supported values are Bool, Int, Float, String, form-backed objects, arrays, and typed native structs/struct arrays with recursively validated fields and explicit typed nulls. Var, unknown fields/types, raw VM pointers, and untyped JSON inference are rejected. A call timeout is not cancellation: an accepted latent call can complete later and is never retried.",
@@ -2043,7 +2312,7 @@
           "readOnly": false
         },
         {
-          "description": "Read or control the native player camera. get returns the live POV, state id, free-camera ownership, and available transform fields. setPov uses the adapter's normal first/third-person transitions and its native auto-vanity entry path. freecam enters/exits the native free-camera stack without freezing time, but only exits a mode entered by DevBench. drive requires DevBench-owned free camera and sets an absolute world-unit position plus pitch/yaw radians; angles are normalized before dispatch. Mutations require allowControlActions=true. A mutation that starts but misses its acknowledgement deadline has an uncertain outcome and must not be retried.",
+          "description": "Read or control the native player camera. get returns the live POV, state id, free-camera ownership, and available transform fields. setPov uses the adapter's normal first/third-person transitions and its native auto-vanity entry path. freecam enters/exits the native free-camera stack without freezing time, but only exits a mode entered by DevBench. drive requires DevBench-owned free camera and sets an absolute world-unit position plus pitch/yaw radians; angles are normalized before dispatch. frame (formId of a placed reference; optional side front (default)|back|left|right|top|bottom, aroundDeg, distance, distanceScale, eyeHeight, pitchDeg) drives the already-owned free camera to look at that reference from one side and returns { side, target, pose: { x, y, z, pitch, yaw } }. front/back/left/right are relative to the reference's own heading (inspect refs rotation.z) with right on its clockwise side; top looks straight down with the image's up being its front, bottom straight up. The camera sits 1.4 x the reference's height away (distanceScale scales that, distance sets units) at eyeHeight (default 0.85) of its height; aroundDeg replaces the side's horizontal angle; pitchDeg tilts, positive looks down. A reference without bounds is framed as a 128-unit-tall target. Mutations require allowControlActions=true. A mutation that starts but misses its acknowledgement deadline has an uncertain outcome and must not be retried.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -2053,8 +2322,35 @@
                   "get",
                   "setPov",
                   "freecam",
-                  "drive"
+                  "drive",
+                  "frame"
                 ],
+                "type": "string"
+              },
+              "aroundDeg": {
+                "description": "frame: degrees clockwise from the reference's front, replacing the side's horizontal angle",
+                "type": "number"
+              },
+              "distance": {
+                "description": "frame: camera distance in world units (default 1.4 x the reference's height)",
+                "exclusiveMinimum": 0,
+                "maximum": 100000.0,
+                "type": "number"
+              },
+              "distanceScale": {
+                "description": "frame: multiplier on the default distance (default 1)",
+                "exclusiveMinimum": 0,
+                "maximum": 1000.0,
+                "type": "number"
+              },
+              "eyeHeight": {
+                "description": "frame: camera height as a fraction of the reference's height (default 0.85)",
+                "maximum": 2.0,
+                "minimum": 0,
+                "type": "number"
+              },
+              "formId": {
+                "description": "frame: placed reference to look at (0x-prefixed/bare hexadecimal FormID or EditorID)",
                 "type": "string"
               },
               "on": {
@@ -2066,12 +2362,31 @@
                 "description": "drive pitch in radians",
                 "type": "number"
               },
+              "pitchDeg": {
+                "description": "frame: camera tilt in degrees, positive looks down (default 0; top and bottom use +-89)",
+                "maximum": 89.0,
+                "minimum": -89.0,
+                "type": "number"
+              },
               "pov": {
                 "description": "setPov target",
                 "enum": [
                   "first",
                   "third",
                   "vanity"
+                ],
+                "type": "string"
+              },
+              "side": {
+                "default": "front",
+                "description": "frame: side to look from, relative to the reference's heading",
+                "enum": [
+                  "front",
+                  "back",
+                  "left",
+                  "right",
+                  "top",
+                  "bottom"
                 ],
                 "type": "string"
               },
