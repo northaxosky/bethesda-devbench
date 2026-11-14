@@ -18,20 +18,19 @@ namespace dvb::fallout4::inspection
 		constexpr std::size_t kParentStepBudget = 100000;
 		constexpr std::size_t kPathDepth = 64;
 
+		// Suns are held raw at refcount 0; a NiPointer here would free them.
 		struct SceneLight
 		{
-			RE::NiPointer<RE::BSLight> light;
-			std::vector<const char*>   lists;
+			RE::BSLight*             light;
+			std::vector<const char*> lists;
 		};
 
-		// The renderer's lists hold the same light more than once (a sun is also in
-		// a list), so entries are keyed by light and carry every list they appear in.
+		// One entry per light with every renderer list it is in; build under lightLock.
 		class SceneSnapshot
 		{
 		public:
 			explicit SceneSnapshot(RE::ShadowSceneNode& a_scene)
 			{
-				const RE::BSAutoLock lock(a_scene.lightLock);
 				for (const auto& light : a_scene.nonShadowLights)
 					Add("nonShadow", light.get());
 				for (const auto& light : a_scene.shadowLights)
@@ -60,7 +59,7 @@ namespace dvb::fallout4::inspection
 				const auto [it, inserted] = index_.try_emplace(a_light, lights_.size());
 				if (inserted)
 				{
-					lights_.push_back({ RE::NiPointer<RE::BSLight>(a_light), {} });
+					lights_.push_back({ a_light, {} });
 					if (const auto* source = a_light->GetSourceLight())
 						byNiLight_.try_emplace(source, it->second);
 				}
@@ -312,10 +311,18 @@ namespace dvb::fallout4::inspection
 			                      nullptr;
 			if (!scene)
 				throw ToolError(503, "inspect lights: the world scene is unavailable");
-			const SceneSnapshot snapshot(*scene);
-			return scope == tools::inspection::LightsScope::kScene ?
-			           ReadSceneLights(request, snapshot) :
-			           ReadReferenceLights(request, snapshot);
+			if (scope == tools::inspection::LightsScope::kScene)
+			{
+				// Scene lights are dereferenced, so the lock spans the whole read.
+				const RE::BSAutoLock lock(scene->lightLock);
+				return ReadSceneLights(request, SceneSnapshot(*scene));
+			}
+			// Ref scope only compares light addresses against the snapshot.
+			const auto snapshot = [scene] {
+				const RE::BSAutoLock lock(scene->lightLock);
+				return SceneSnapshot(*scene);
+			}();
+			return ReadReferenceLights(request, snapshot);
 		});
 	}
 }
