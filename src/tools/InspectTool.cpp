@@ -127,7 +127,7 @@ namespace dvb::tools
 			"mods reports the final full/light load order after gameDataReady. inventory reads a "
 			"player or container inventory; quests reads native journal objectives; "
 			"effects reads an actor's active-effect list; refs resolves, selects, or enumerates loaded "
-			"forms; registrants reports the existing HostApi consumer/registration ledger. extensions lists "
+			"forms (optional model filter: base-object mesh path substring); registrants reports the existing HostApi consumer/registration ledger. extensions lists "
 			"consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.";
 		descriptor.inputSchema = json{
 			{ "type", "object" },
@@ -137,6 +137,7 @@ namespace dvb::tools
 								{ "formId", json{ { "type", "string" }, { "description", "inventory owner, effects actor, or refs form: 0x-prefixed/bare hexadecimal FormID or EditorID" } } },
 								{ "selected", json{ { "type", "boolean" }, { "description", "refs only: use the console's current picked reference handle" } } },
 								{ "formType", json{ { "type", "string" }, { "description", "inventory/refs: case-insensitive record type code or friendly alias" } } },
+								{ "model", json{ { "type", "string" }, { "description", "refs enumeration: keep refs whose base object's mesh path contains this substring (case-insensitive); matches statics and furniture, not actors" } } },
 								{ "radius", json{ { "type", "number" }, { "minimum", 0 }, { "description", "refs enumeration radius from the player; 0 scans the loaded grid" } } },
 								{ "limit", json{ { "type", "integer" }, { "minimum", 0 }, { "maximum", inspection::kMaxListLimit }, { "default", inspection::kDefaultListLimit } } },
 							} },

@@ -111,6 +111,14 @@ namespace dvb::skyrimse::inspection
 			};
 		}
 
+		const char* ModelPath(const RE::TESObjectREFR& a_reference)
+		{
+			const auto* base = a_reference.GetBaseObject();
+			const auto* model = base ? base->As<RE::TESModel>() : nullptr;
+			const char* path = model ? model->GetModel() : nullptr;
+			return path && *path ? path : nullptr;
+		}
+
 		json SerializeReference(RE::TESObjectREFR* a_reference)
 		{
 			if (!a_reference)
@@ -124,10 +132,25 @@ namespace dvb::skyrimse::inspection
 				{ "y", position.y },
 				{ "z", position.z },
 			};
+			const auto angle = a_reference->GetAngle();
+			out["rotation"] = tools::inspection::Vec3Json(angle.x, angle.y, angle.z);
+			if (const auto* cell = a_reference->GetParentCell())
+				out["cell"] = SerializeForm(cell);
+			if (const auto* model = ModelPath(*a_reference))
+				out["model"] = model;
+			const auto boundMin = a_reference->GetBoundMin();
+			const auto boundMax = a_reference->GetBoundMax();
+			if (boundMin != RE::NiPoint3{} || boundMax != RE::NiPoint3{})
+				out["bounds"] = json{
+					{ "min", tools::inspection::Vec3Json(boundMin.x, boundMin.y, boundMin.z) },
+					{ "max", tools::inspection::Vec3Json(boundMax.x, boundMax.y, boundMax.z) },
+				};
+			out["loaded3D"] = a_reference->Is3DLoaded();
 			if (auto* actor = a_reference->As<RE::Actor>())
 			{
 				json actorState{
 					{ "level", actor->GetLevel() },
+					{ "alive", !actor->IsDead() },
 					{ "health", ActorValue(*actor, RE::ActorValue::kHealth) },
 					{ "playerTeammate", actor->IsPlayerTeammate() },
 				};
@@ -406,6 +429,8 @@ namespace dvb::skyrimse::inspection
 				if (!request.formType.empty() &&
 					!MatchesType(a_reference, request.formType) &&
 					!MatchesType(a_reference->GetBaseObject(), request.formType))
+					return RE::BSContainer::ForEachResult::kContinue;
+				if (!tools::inspection::MatchesModelPath(ModelPath(*a_reference), request.model))
 					return RE::BSContainer::ForEachResult::kContinue;
 				return refs.Observe(SerializeReference(a_reference)) ?
 				           RE::BSContainer::ForEachResult::kContinue :

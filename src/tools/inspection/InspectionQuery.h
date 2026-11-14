@@ -23,6 +23,7 @@ namespace dvb::tools::inspection
 		std::string kind = "state";
 		std::string formId;
 		std::string formType;
+		std::string model;  // refs: lowercase mesh path substring
 		bool        selected = false;
 		double      radius = 0.0;
 		std::size_t limit = kDefaultListLimit;
@@ -73,6 +74,19 @@ namespace dvb::tools::inspection
 		return LowerAscii(std::string(a_formType)).find(a_normalizedFilter) != std::string::npos;
 	}
 
+	// An empty needle matches everything; a missing mesh path never matches a non-empty one.
+	inline bool MatchesModelPath(const char* a_path, std::string_view a_loweredNeedle)
+	{
+		if (a_loweredNeedle.empty())
+			return true;
+		return a_path && LowerAscii(a_path).find(a_loweredNeedle) != std::string::npos;
+	}
+
+	inline json Vec3Json(float a_x, float a_y, float a_z)
+	{
+		return json{ { "x", a_x }, { "y", a_y }, { "z", a_z } };
+	}
+
 	inline std::string ReadKind(const json& a_args)
 	{
 		if (!a_args.is_object())
@@ -105,6 +119,12 @@ namespace dvb::tools::inspection
 			if (!it->is_string())
 				throw ToolError(400, "'formType' must be a string");
 			request.formType = NormalizeFormType(it->get<std::string>());
+		}
+		if (const auto it = a_args.find("model"); it != a_args.end())
+		{
+			if (!it->is_string())
+				throw ToolError(400, "'model' must be a string");
+			request.model = LowerAscii(it->get<std::string>());
 		}
 		if (const auto it = a_args.find("selected"); it != a_args.end())
 		{

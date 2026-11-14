@@ -4,6 +4,7 @@
 
 using dvb::json;
 using dvb::tools::inspection::MatchesFormType;
+using dvb::tools::inspection::MatchesModelPath;
 using dvb::tools::inspection::NormalizeFormType;
 using dvb::tools::inspection::ParseRequest;
 using dvb::tools::inspection::ResultWindow;
@@ -59,4 +60,13 @@ TEST_CASE("inspection result windows expose truncation without pretending the co
 	CHECK(emptyResult.at("returned") == 0);
 	CHECK(emptyResult.at("countExact") == true);
 	CHECK(emptyResult.at("quests").empty());
+}
+
+TEST_CASE("model filter parses lowercase and matches mesh paths")
+{
+	const auto request = ParseRequest(json{ { "kind", "refs" }, { "model", "Meshes/WRCity" } });
+	CHECK(request.model == "meshes/wrcity");
+	CHECK(MatchesModelPath("Meshes/WRCity01.nif", request.model));
+	CHECK(!MatchesModelPath(nullptr, request.model));
+	CHECK(MatchesModelPath(nullptr, ""));
 }

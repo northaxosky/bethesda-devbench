@@ -15,19 +15,6 @@ namespace dvb::fallout4::inspection
 		using Request = tools::inspection::Request;
 		using ResultWindow = tools::inspection::ResultWindow;
 
-		void RequireStableWorld(std::string_view a_kind)
-		{
-			const auto lifecycle = Lifecycle::GetSnapshot();
-			if (!lifecycle.gameDataReady)
-				throw ToolError(503, std::format("inspect {}: game data is not ready", a_kind));
-			if (lifecycle.inMainMenu)
-				throw ToolError(503, std::format("inspect {}: unavailable in the main menu", a_kind));
-			if (lifecycle.inLoadingMenu || lifecycle.loadInProgress)
-				throw ToolError(503, std::format("inspect {}: unavailable while a load is in progress", a_kind));
-			if (lifecycle.postLoadSucceeded == false)
-				throw ToolError(503, std::format("inspect {}: the last load failed", a_kind));
-		}
-
 		bool HasQuestFlag(const RE::TESQuest& a_quest, RE::QuestFlag a_flag)
 		{
 			return (a_quest.data.flags & static_cast<std::uint16_t>(a_flag)) != 0;
@@ -73,28 +60,6 @@ namespace dvb::fallout4::inspection
 			return text.data() ? std::string(text.data(), text.size()) : std::string{};
 		}
 
-		RE::TESObjectREFR* ResolveReferenceTarget(
-			std::string_view   a_identifier,
-			RE::TESObjectREFR* a_default,
-			std::string_view   a_kind)
-		{
-			if (a_identifier.empty())
-			{
-				if (!a_default)
-					throw ToolError(503, std::format("inspect {}: player unavailable", a_kind));
-				return a_default;
-			}
-
-			auto* form = ResolveForm(a_identifier);
-			if (!form)
-				throw ToolError(404, std::format("inspect {}: form '{}' not found", a_kind, a_identifier));
-			auto* reference = form->As<RE::TESObjectREFR>();
-			if (!reference)
-				throw ToolError(
-					422, std::format("inspect {}: form '{}' is not a placed reference", a_kind, a_identifier));
-			return reference;
-		}
-
 		RE::Actor* ResolveActorTarget(
 			std::string_view a_identifier,
 			RE::Actor*       a_default,
@@ -122,6 +87,14 @@ namespace dvb::fallout4::inspection
 			};
 		}
 
+		const char* ModelPath(const RE::TESObjectREFR& a_reference)
+		{
+			const auto* base = a_reference.GetObjectReference();
+			const auto* model = base ? base->As<RE::TESModel>() : nullptr;
+			const char* path = model ? model->GetModel() : nullptr;
+			return path && *path ? path : nullptr;
+		}
+
 		json SerializeReference(RE::TESObjectREFR* a_reference)
 		{
 			if (!a_reference)
@@ -135,11 +108,27 @@ namespace dvb::fallout4::inspection
 				{ "y", position.y },
 				{ "z", position.z },
 			};
+			out["rotation"] = tools::inspection::Vec3Json(
+				a_reference->data.angle.x, a_reference->data.angle.y, a_reference->data.angle.z);
+			if (const auto* cell = a_reference->GetParentCell())
+				out["cell"] = SerializeForm(cell);
+			if (const auto* model = ModelPath(*a_reference))
+				out["model"] = model;
+			const auto boundMin = a_reference->GetBoundMin();
+			const auto boundMax = a_reference->GetBoundMax();
+			if (boundMin != RE::NiPoint3{} || boundMax != RE::NiPoint3{})
+				out["bounds"] = json{
+					{ "min", tools::inspection::Vec3Json(boundMin.x, boundMin.y, boundMin.z) },
+					{ "max", tools::inspection::Vec3Json(boundMax.x, boundMax.y, boundMax.z) },
+				};
+			out["loaded3D"] = a_reference->Get3D() != nullptr;
 
 			if (auto* actor = a_reference->As<RE::Actor>())
 			{
-				json actorState{
+				const auto lifeState = static_cast<RE::ACTOR_LIFE_STATE>(actor->lifeState);
+				json       actorState{
 					{ "level", actor->GetLevel() },
+					{ "alive", lifeState != RE::ACTOR_LIFE_STATE::kDead && lifeState != RE::ACTOR_LIFE_STATE::kDying },
 				};
 				if (const auto values = RE::ActorValue::GetSingleton())
 					actorState["health"] = ActorValue(*actor, values->health);
@@ -157,6 +146,41 @@ namespace dvb::fallout4::inspection
 			const auto type = a_form->GetFormTypeString();
 			return type && tools::inspection::MatchesFormType(type, a_filter);
 		}
+	}
+
+	void RequireStableWorld(std::string_view a_kind)
+	{
+		const auto lifecycle = Lifecycle::GetSnapshot();
+		if (!lifecycle.gameDataReady)
+			throw ToolError(503, std::format("inspect {}: game data is not ready", a_kind));
+		if (lifecycle.inMainMenu)
+			throw ToolError(503, std::format("inspect {}: unavailable in the main menu", a_kind));
+		if (lifecycle.inLoadingMenu || lifecycle.loadInProgress)
+			throw ToolError(503, std::format("inspect {}: unavailable while a load is in progress", a_kind));
+		if (lifecycle.postLoadSucceeded == false)
+			throw ToolError(503, std::format("inspect {}: the last load failed", a_kind));
+	}
+
+	RE::TESObjectREFR* ResolveReferenceTarget(
+		std::string_view   a_identifier,
+		RE::TESObjectREFR* a_default,
+		std::string_view   a_kind)
+	{
+		if (a_identifier.empty())
+		{
+			if (!a_default)
+				throw ToolError(503, std::format("inspect {}: player unavailable", a_kind));
+			return a_default;
+		}
+
+		auto* form = ResolveForm(a_identifier);
+		if (!form)
+			throw ToolError(404, std::format("inspect {}: form '{}' not found", a_kind, a_identifier));
+		auto* reference = form->As<RE::TESObjectREFR>();
+		if (!reference)
+			throw ToolError(
+				422, std::format("inspect {}: form '{}' is not a placed reference", a_kind, a_identifier));
+		return reference;
 	}
 
 	json ReadVm(const Request&)
@@ -456,6 +480,8 @@ namespace dvb::fallout4::inspection
 				if (!request.formType.empty() &&
 					!MatchesType(a_reference, request.formType) &&
 					!MatchesType(a_reference->GetObjectReference(), request.formType))
+					return RE::BSContainer::ForEachResult::kContinue;
+				if (!tools::inspection::MatchesModelPath(ModelPath(*a_reference), request.model))
 					return RE::BSContainer::ForEachResult::kContinue;
 				if (!refs.Observe(SerializeReference(a_reference)))
 				{
