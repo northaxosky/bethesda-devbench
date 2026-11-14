@@ -4,6 +4,7 @@
 #include "game/fallout4/LivePlayer.h"
 #include "game/fallout4/Runtime.h"
 #include "game/fallout4/inspection/Form.h"
+#include "game/fallout4/inspection/Readers.h"
 #include "tools/camera/MutationDispatch.h"
 
 namespace dvb::fallout4
@@ -182,15 +183,8 @@ namespace dvb::fallout4
 				[identifier = std::string(a_identifier)]() -> json {
 					if (!ReadLivePlayer().readiness.loaded)
 						throw ToolError(422, "camera frame requires a loaded scene");
-					auto* form = inspection::ResolveForm(identifier);
-					if (!form)
-						throw ToolError(
-							404, std::format("camera frame: form '{}' not found", identifier));
-					auto* reference = form->As<RE::TESObjectREFR>();
-					if (!reference)
-						throw ToolError(422,
-							std::format(
-								"camera frame: '{}' is not a placed reference", identifier));
+					auto* reference =
+						inspection::ResolveReferenceTarget(identifier, nullptr, "camera frame");
 					const auto position = reference->GetPosition();
 					const auto boundMin = reference->GetBoundMin();
 					const auto boundMax = reference->GetBoundMax();

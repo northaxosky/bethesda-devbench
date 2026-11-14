@@ -65,7 +65,8 @@ namespace dvb::fallout4::inspection
 			RE::Actor*       a_default,
 			std::string_view a_kind)
 		{
-			auto* reference = ResolveReferenceTarget(a_identifier, a_default, a_kind);
+			auto* reference = ResolveReferenceTarget(
+				a_identifier, a_default, std::format("inspect {}", a_kind));
 			auto* actor = reference->As<RE::Actor>();
 			if (!actor)
 				throw ToolError(
@@ -164,22 +165,22 @@ namespace dvb::fallout4::inspection
 	RE::TESObjectREFR* ResolveReferenceTarget(
 		std::string_view   a_identifier,
 		RE::TESObjectREFR* a_default,
-		std::string_view   a_kind)
+		std::string_view   a_prefix)
 	{
 		if (a_identifier.empty())
 		{
 			if (!a_default)
-				throw ToolError(503, std::format("inspect {}: player unavailable", a_kind));
+				throw ToolError(503, std::format("{}: player unavailable", a_prefix));
 			return a_default;
 		}
 
 		auto* form = ResolveForm(a_identifier);
 		if (!form)
-			throw ToolError(404, std::format("inspect {}: form '{}' not found", a_kind, a_identifier));
+			throw ToolError(404, std::format("{}: form '{}' not found", a_prefix, a_identifier));
 		auto* reference = form->As<RE::TESObjectREFR>();
 		if (!reference)
 			throw ToolError(
-				422, std::format("inspect {}: form '{}' is not a placed reference", a_kind, a_identifier));
+				422, std::format("{}: form '{}' is not a placed reference", a_prefix, a_identifier));
 		return reference;
 	}
 
@@ -239,7 +240,7 @@ namespace dvb::fallout4::inspection
 		return MainThread::RunAndWait([request = a_request]() -> json {
 			RequireStableWorld("inventory");
 			auto* owner = ResolveReferenceTarget(
-				request.formId, RE::PlayerCharacter::GetSingleton(), "inventory");
+				request.formId, RE::PlayerCharacter::GetSingleton(), "inspect inventory");
 			json         ownerIdentity = SerializeForm(owner);
 			ResultWindow items(request.limit);
 			auto*        inventory = owner->inventoryList;
