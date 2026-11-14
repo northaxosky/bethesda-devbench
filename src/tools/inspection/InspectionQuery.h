@@ -24,6 +24,7 @@ namespace dvb::tools::inspection
 		std::string formId;
 		std::string formType;
 		std::string model;  // refs: lowercase mesh path substring
+		std::string scope;  // lights: "", "ref" or "scene"
 		bool        selected = false;
 		double      radius = 0.0;
 		std::size_t limit = kDefaultListLimit;
@@ -126,6 +127,12 @@ namespace dvb::tools::inspection
 				throw ToolError(400, "'model' must be a string");
 			request.model = LowerAscii(it->get<std::string>());
 		}
+		if (const auto it = a_args.find("scope"); it != a_args.end())
+		{
+			if (!it->is_string())
+				throw ToolError(400, "'scope' must be a string");
+			request.scope = it->get<std::string>();
+		}
 		if (const auto it = a_args.find("selected"); it != a_args.end())
 		{
 			if (!it->is_boolean())
@@ -162,7 +169,7 @@ namespace dvb::tools::inspection
 					400, std::format("'limit' must be between 0 and {}", kMaxListLimit));
 			request.limit = static_cast<std::size_t>(limit);
 		}
-		if (request.kind == "refs" && !request.formId.empty() && request.selected)
+		if ((request.kind == "refs" || request.kind == "lights") && !request.formId.empty() && request.selected)
 			throw ToolError(400, "'formId' and 'selected' are mutually exclusive");
 		return request;
 	}

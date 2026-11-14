@@ -11,9 +11,9 @@ namespace dvb::tools
 {
 	namespace
 	{
-		constexpr std::array<std::string_view, 12> kBuiltInKinds{
+		constexpr std::array<std::string_view, 13> kBuiltInKinds{
 			"health", "state", "vm", "player", "scene", "mods", "inventory", "quests",
-			"effects", "refs", "registrants", "extensions"
+			"effects", "refs", "lights", "registrants", "extensions"
 		};
 
 		json InvokeBuiltIn(const std::function<json()>& a_handler, std::string_view a_kind)
@@ -55,6 +55,8 @@ namespace dvb::tools
 				return InvokeBuiltIn(a_backend.effects, inspection::ParseRequest(a_args));
 			if (kind == "refs")
 				return InvokeBuiltIn(a_backend.refs, inspection::ParseRequest(a_args));
+			if (kind == "lights")
+				return InvokeBuiltIn(a_backend.lights, inspection::ParseRequest(a_args));
 			if (kind == "registrants")
 				return InvokeBuiltIn(a_backend.registrants, inspection::ParseRequest(a_args));
 			if (kind == "extensions")
@@ -74,7 +76,7 @@ namespace dvb::tools
 
 			throw ToolError(400,
 				std::format(
-					"unsupported inspect kind '{}' (supported: health|state|vm|player|scene|mods|inventory|quests|effects|refs|registrants|extensions, or a registered extension)",
+					"unsupported inspect kind '{}' (supported: health|state|vm|player|scene|mods|inventory|quests|effects|refs|lights|registrants|extensions, or a registered extension)",
 					kind));
 		}
 	}
@@ -127,18 +129,21 @@ namespace dvb::tools
 			"mods reports the final full/light load order after gameDataReady. inventory reads a "
 			"player or container inventory; quests reads native journal objectives; "
 			"effects reads an actor's active-effect list; refs resolves, selects, or enumerates loaded "
-			"forms (optional model filter: base-object mesh path substring); registrants reports the existing HostApi consumer/registration ledger. extensions lists "
+			"forms (optional model filter: base-object mesh path substring); lights reads the renderer's "
+			"light lists (scope=scene, nearest the player first; radius and limit apply) or the NiLights under a "
+			"reference's 3D (scope=ref, default the player, or formId/selected); registrants reports the existing HostApi consumer/registration ledger. extensions lists "
 			"consumer-registered inspect kinds; registered kinds dispatch through ToolExtensions.";
 		descriptor.inputSchema = json{
 			{ "type", "object" },
 			{ "additionalProperties", true },  // extension kinds take their own arguments
 			{ "properties", json{
 								{ "kind", json{ { "type", "string" }, { "enum", std::move(kinds) }, { "default", "state" } } },
-								{ "formId", json{ { "type", "string" }, { "description", "inventory owner, effects actor, or refs form: 0x-prefixed/bare hexadecimal FormID or EditorID" } } },
-								{ "selected", json{ { "type", "boolean" }, { "description", "refs only: use the console's current picked reference handle" } } },
-								{ "formType", json{ { "type", "string" }, { "description", "inventory/refs: case-insensitive record type code or friendly alias" } } },
+								{ "formId", json{ { "type", "string" }, { "description", "inventory owner, effects actor, or refs/lights form: 0x-prefixed/bare hexadecimal FormID or EditorID" } } },
+								{ "selected", json{ { "type", "boolean" }, { "description", "refs/lights: use the console's current picked reference handle" } } },
+								{ "scope", json{ { "type", "string" }, { "enum", json::array({ "ref", "scene" }) }, { "description", "lights only: ref (default) reads one reference's 3D; scene lists the renderer's lights" } } },
 								{ "model", json{ { "type", "string" }, { "description", "refs enumeration: keep refs whose base object's mesh path contains this substring (case-insensitive); matches statics and furniture, not actors" } } },
-								{ "radius", json{ { "type", "number" }, { "minimum", 0 }, { "description", "refs enumeration radius from the player; 0 scans the loaded grid" } } },
+								{ "formType", json{ { "type", "string" }, { "description", "inventory/refs: case-insensitive record type code or friendly alias" } } },
+								{ "radius", json{ { "type", "number" }, { "minimum", 0 }, { "description", "refs/lights-scene radius from the player; 0 scans the loaded grid or applies no limit" } } },
 								{ "limit", json{ { "type", "integer" }, { "minimum", 0 }, { "maximum", inspection::kMaxListLimit }, { "default", inspection::kDefaultListLimit } } },
 							} },
 		};

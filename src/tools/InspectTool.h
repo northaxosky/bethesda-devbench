@@ -42,6 +42,7 @@ namespace dvb::tools
 		std::function<json(const inspection::Request&)> quests;
 		std::function<json(const inspection::Request&)> effects;
 		std::function<json(const inspection::Request&)> refs;
+		std::function<json(const inspection::Request&)> lights;
 		std::function<json(const inspection::Request&)> registrants;
 	};
 

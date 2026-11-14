@@ -280,6 +280,7 @@ namespace dvb::fallout4
 			.quests = &inspection::ReadQuests,
 			.effects = &inspection::ReadEffects,
 			.refs = &inspection::ReadReferences,
+			.lights = &inspection::ReadLights,
 			.registrants = &inspection::ReadRegistrants,
 		};
 	}

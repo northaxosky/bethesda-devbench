@@ -62,11 +62,13 @@ TEST_CASE("inspection result windows expose truncation without pretending the co
 	CHECK(emptyResult.at("quests").empty());
 }
 
-TEST_CASE("model filter parses lowercase and matches mesh paths")
+TEST_CASE("model and scope parse, and lights share the refs target exclusion")
 {
-	const auto request = ParseRequest(json{ { "kind", "refs" }, { "model", "Meshes/WRCity" } });
+	const auto request = ParseRequest(json{ { "kind", "lights" }, { "scope", "scene" }, { "model", "Meshes/WRCity" } });
+	CHECK(request.scope == "scene");
 	CHECK(request.model == "meshes/wrcity");
 	CHECK(MatchesModelPath("Meshes/WRCity01.nif", request.model));
 	CHECK(!MatchesModelPath(nullptr, request.model));
 	CHECK(MatchesModelPath(nullptr, ""));
+	CHECK_THROWS(ParseRequest(json{ { "kind", "lights" }, { "formId", "0x14" }, { "selected", true } }));
 }

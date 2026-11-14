@@ -15,4 +15,5 @@ namespace dvb::fallout4::inspection
 	json ReadEffects(const tools::inspection::Request& a_request);
 	json ReadReferences(const tools::inspection::Request& a_request);
 	json ReadRegistrants(const tools::inspection::Request& a_request);
+	json ReadLights(const tools::inspection::Request& a_request);
 }
