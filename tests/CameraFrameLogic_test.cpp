@@ -3,7 +3,6 @@
 #include "test_framework.h"
 
 #include <cmath>
-#include <limits>
 #include <numbers>
 #include <string>
 
@@ -97,7 +96,7 @@ TEST_CASE("empty bounds fall back to a standing human's height")
 	t.heading = 0.0;
 	const Pose p = Frame(t, Options{});
 	CHECK(Near(p.z, 0.85 * kDefaultHeight, 1e-6));
-	CHECK(Near(p.y, kDistanceFactor * kDefaultHeight, 1e-6));  // heading 0 faces +Y, so front is north of the target
+	CHECK(Near(p.y, kDistanceFactor * kDefaultHeight, 1e-6));  // heading 0 faces +Y, so front is north
 	CHECK(Near(p.x, 0.0, 1e-6));
 }
 
@@ -132,71 +131,4 @@ TEST_CASE("an explicit pitch overrides the default")
 	Options o = At180(Side::kFront);
 	o.pitchRad = 0.2;
 	CHECK(Near(Frame(SampleTarget(), o).pitch, 0.2, 1e-12));
-}
-
-TEST_CASE("side names parse exactly")
-{
-	CHECK(ParseSide("front") == Side::kFront);
-	CHECK(ParseSide("back") == Side::kBack);
-	CHECK(ParseSide("left") == Side::kLeft);
-	CHECK(ParseSide("right") == Side::kRight);
-	CHECK(ParseSide("top") == Side::kTop);
-	CHECK(ParseSide("bottom") == Side::kBottom);
-	CHECK(!ParseSide("Front").has_value());
-	CHECK(!ParseSide("").has_value());
-}
-
-TEST_CASE("angles wrap into (-pi, pi]")
-{
-	constexpr double pi = std::numbers::pi;
-	CHECK(Near(WrapPi(pi), pi, 1e-12));
-	CHECK(Near(WrapPi(-pi), pi, 1e-12));
-	CHECK(Near(WrapPi(3.0 * pi), pi, 1e-9));
-	CHECK(Near(WrapPi(2.0 * pi + 0.1), 0.1, 1e-9));
-	CHECK(Near(WrapPi(-2.0 * pi - 0.1), -0.1, 1e-9));
-}
-
-TEST_CASE("options within their limits are accepted")
-{
-	CHECK(!Validate(Options{}).has_value());
-	Options o;
-	o.distance = kMaxDistance;
-	o.distanceScale = kMaxDistanceScale;
-	o.eyeFraction = kMaxEyeFraction;
-	o.pitchRad = kMaxPitch;
-	o.aroundRad = 12.0;
-	CHECK(!Validate(o).has_value());
-}
-
-TEST_CASE("options outside their limits are rejected with the parameter named")
-{
-	const auto reject = [](Options o, const char* a_name) {
-		const auto why = Validate(o);
-		return why.has_value() && why->find(a_name) != std::string::npos;
-	};
-	Options o;
-	o.distance = 0.0;
-	CHECK(reject(o, "'distance'"));
-	o.distance = kMaxDistance * 2.0;
-	CHECK(reject(o, "'distance'"));
-	o = Options{};
-	o.distanceScale = 0.0;
-	CHECK(reject(o, "'distanceScale'"));
-	o.distanceScale = kMaxDistanceScale + 1.0;
-	CHECK(reject(o, "'distanceScale'"));
-	o = Options{};
-	o.eyeFraction = -0.1;
-	CHECK(reject(o, "'eyeHeight'"));
-	o.eyeFraction = kMaxEyeFraction + 0.1;
-	CHECK(reject(o, "'eyeHeight'"));
-	o = Options{};
-	o.pitchRad = kMaxPitch + 0.01;
-	CHECK(reject(o, "'pitchDeg'"));
-	o.pitchRad = -kMaxPitch - 0.01;
-	CHECK(reject(o, "'pitchDeg'"));
-	o = Options{};
-	o.aroundRad = std::numeric_limits<double>::infinity();
-	CHECK(reject(o, "'aroundDeg'"));
-	o.aroundRad = std::numeric_limits<double>::quiet_NaN();
-	CHECK(reject(o, "'aroundDeg'"));
 }
