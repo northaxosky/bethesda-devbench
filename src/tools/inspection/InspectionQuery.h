@@ -1,5 +1,6 @@
 #pragma once
 
+#include "InspectLogic.h"
 #include "ToolRegistry.h"
 
 #include <algorithm>
@@ -24,7 +25,7 @@ namespace dvb::tools::inspection
 		std::string formId;
 		std::string formType;
 		std::string model;  // refs: lowercase mesh path substring
-		std::string scope;  // lights: "", "ref" or "scene"
+		LightsScope scope = LightsScope::kRef;  // lights only
 		bool        selected = false;
 		double      radius = 0.0;
 		std::size_t limit = kDefaultListLimit;
@@ -75,7 +76,7 @@ namespace dvb::tools::inspection
 		return LowerAscii(std::string(a_formType)).find(a_normalizedFilter) != std::string::npos;
 	}
 
-	// An empty needle matches everything; a missing mesh path never matches a non-empty one.
+	// An empty needle matches all; a missing path never matches a needle.
 	inline bool MatchesModelPath(const char* a_path, std::string_view a_loweredNeedle)
 	{
 		if (a_loweredNeedle.empty())
@@ -131,7 +132,15 @@ namespace dvb::tools::inspection
 		{
 			if (!it->is_string())
 				throw ToolError(400, "'scope' must be a string");
-			request.scope = it->get<std::string>();
+			const auto& scope = it->get_ref<const std::string&>();
+			if (request.kind == "lights")
+			{
+				if (scope == "scene")
+					request.scope = LightsScope::kScene;
+				else if (!scope.empty() && scope != "ref")
+					throw ToolError(
+						400, std::format("inspect lights: unknown scope '{}' (ref|scene)", scope));
+			}
 		}
 		if (const auto it = a_args.find("selected"); it != a_args.end())
 		{

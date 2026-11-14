@@ -15,7 +15,6 @@ namespace dvb::fallout4::inspection
 		using Budget = tools::inspection::TraversalBudget;
 
 		constexpr std::size_t kNodeBudget = 50000;
-		constexpr std::size_t kParentStepBudget = 100000;
 		constexpr std::size_t kPathDepth = 64;
 
 		// Suns are held raw at refcount 0; a NiPointer here would free them.
@@ -25,7 +24,7 @@ namespace dvb::fallout4::inspection
 			std::vector<const char*> lists;
 		};
 
-		// One entry per light with every renderer list it is in; build under lightLock.
+		// One entry per light with all its renderer lists; build under lightLock.
 		class SceneSnapshot
 		{
 		public:
@@ -106,15 +105,14 @@ namespace dvb::fallout4::inspection
 			return out;
 		}
 
-		// "Root > ... > Parent": names from the top of the graph (or a_root) down to the
-		// light's parent; a path cut short starts with "... ".
-		std::string NodePath(const RE::NiAVObject& a_object, const RE::NiAVObject* a_root, Budget& a_budget)
+		// A path cut at kPathDepth starts with "... ".
+		std::string NodePath(const RE::NiAVObject& a_object, const RE::NiAVObject* a_root)
 		{
 			std::vector<std::string> names;
 			bool                     cut = false;
 			for (const RE::NiAVObject* node = a_object.parent; node; node = node->parent)
 			{
-				if (names.size() >= kPathDepth || !a_budget.StepParent())
+				if (names.size() >= kPathDepth)
 				{
 					cut = true;
 					break;
@@ -130,7 +128,7 @@ namespace dvb::fallout4::inspection
 			return cut ? "... " + path : path;
 		}
 
-		json DescribeNiLight(const RE::NiLight& a_light, const RE::NiAVObject* a_root, Budget& a_budget)
+		json DescribeNiLight(const RE::NiLight& a_light, const RE::NiAVObject* a_root)
 		{
 			const auto  position = a_light.world.translate;
 			const char* name = a_light.name.c_str();
@@ -138,7 +136,7 @@ namespace dvb::fallout4::inspection
 			json        out{
 				{ "name", name ? name : "" },
 				{ "type", rtti && rtti->GetName() ? rtti->GetName() : "" },
-				{ "path", NodePath(a_light, a_root, a_budget) },
+				{ "path", NodePath(a_light, a_root) },
 				{ "position", tools::inspection::Vec3Json(position.x, position.y, position.z) },
 				{ "diffuse", json::array({ a_light.diff.r, a_light.diff.g, a_light.diff.b }) },
 				{ "dimmer", a_light.dimmer },
@@ -165,8 +163,7 @@ namespace dvb::fallout4::inspection
 				};
 		}
 
-		// Every NiLight under a_root, each node charged to the budget; a node reached twice
-		// is read once.
+		// A node reached twice is read once.
 		json LightsUnder(
 			const RE::NiAVObject*                      a_root,
 			const SceneSnapshot&                       a_scene,
@@ -189,7 +186,7 @@ namespace dvb::fallout4::inspection
 				{
 					if (!a_budget.Emit())
 						break;
-					auto        described = DescribeNiLight(*light, a_root, a_budget);
+					auto        described = DescribeNiLight(*light, a_root);
 					const auto* lists = a_scene.ListsOf(light);
 					described["lists"] = ListNames(lists);
 					if (lists)
@@ -223,7 +220,7 @@ namespace dvb::fallout4::inspection
 				throw ToolError(409, "inspect lights: 'radius' needs a loaded player position");
 			const auto origin = havePosition ? player->GetPosition() : RE::NiPoint3{};
 
-			Budget                                     budget(kNodeBudget, kParentStepBudget, a_request.limit);
+			Budget                                     budget(kNodeBudget, a_request.limit);
 			std::vector<tools::inspection::SceneEntry> entries;
 			for (std::size_t i = 0; i < a_scene.Lights().size(); ++i)
 			{
@@ -237,7 +234,7 @@ namespace dvb::fallout4::inspection
 				if (a_request.radius > 0.0 && *distance > a_request.radius)
 					continue;
 				const char* name = source->name.c_str();
-				entries.push_back({ distance, name ? name : "", {}, position.x, position.y, position.z, i });
+				entries.push_back({ distance, name ? name : "", position.x, position.y, position.z, i });
 			}
 			tools::inspection::OrderScene(entries);
 
@@ -247,7 +244,7 @@ namespace dvb::fallout4::inspection
 				if (!budget.Emit())
 					break;
 				const auto& scene = a_scene.Lights()[entry.index];
-				auto        described = DescribeNiLight(*scene.light->GetSourceLight(), nullptr, budget);
+				auto        described = DescribeNiLight(*scene.light->GetSourceLight(), nullptr);
 				AddSceneFields(described, *scene.light, scene.lists);
 				if (entry.distance)
 					described["distance"] = *entry.distance;
@@ -278,10 +275,10 @@ namespace dvb::fallout4::inspection
 			}
 			else
 			{
-				reference = ResolveReferenceTarget(a_request.formId, player, "lights");
+				reference = ResolveReferenceTarget(a_request.formId, player, "inspect lights");
 			}
 
-			Budget                                    budget(kNodeBudget, kParentStepBudget, a_request.limit);
+			Budget                                    budget(kNodeBudget, a_request.limit);
 			std::unordered_set<const RE::NiAVObject*> visited;
 			const auto*                               root = reference->Get3D();
 			json                                      out{
@@ -299,11 +296,7 @@ namespace dvb::fallout4::inspection
 
 	json ReadLights(const Request& a_request)
 	{
-		const auto scope = tools::inspection::ParseLightsScope(a_request.scope);
-		if (!scope)
-			throw ToolError(
-				400, std::format("inspect lights: unknown scope '{}' (ref|scene)", a_request.scope));
-		return MainThread::RunAndWait([request = a_request, scope = *scope]() -> json {
+		return MainThread::RunAndWait([request = a_request, scope = a_request.scope]() -> json {
 			RequireStableWorld("lights");
 			auto* state = RE::BSShaderManager::State::GetSingleton();
 			auto* scene = state ? state->GetShadowSceneNode(

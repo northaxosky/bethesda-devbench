@@ -5,22 +5,11 @@
 
 namespace dvb::tools::inspection
 {
-	std::optional<LightsScope> ParseLightsScope(std::string_view a_scope)
-	{
-		if (a_scope.empty() || a_scope == "ref")
-			return LightsScope::kRef;
-		if (a_scope == "scene")
-			return LightsScope::kScene;
-		return std::nullopt;
-	}
-
 	std::vector<std::string> TraversalBudget::TruncatedBy() const
 	{
 		std::vector<std::string> out;
 		if (m_nodesExhausted)
 			out.emplace_back("nodes");
-		if (m_parentsExhausted)
-			out.emplace_back("parentSteps");
 		if (m_outputExhausted)
 			out.emplace_back("output");
 		return out;
@@ -33,7 +22,7 @@ namespace dvb::tools::inspection
 				return a.distance.has_value();
 			if (a.distance && *a.distance != *b.distance)
 				return *a.distance < *b.distance;
-			return std::tie(a.name, a.path, a.x, a.y, a.z) < std::tie(b.name, b.path, b.x, b.y, b.z);
+			return std::tie(a.name, a.x, a.y, a.z) < std::tie(b.name, b.x, b.y, b.z);
 		});
 	}
 }

@@ -65,7 +65,7 @@ TEST_CASE("inspection result windows expose truncation without pretending the co
 TEST_CASE("model and scope parse, and lights share the refs target exclusion")
 {
 	const auto request = ParseRequest(json{ { "kind", "lights" }, { "scope", "scene" }, { "model", "Meshes/WRCity" } });
-	CHECK(request.scope == "scene");
+	CHECK(request.scope == dvb::tools::inspection::LightsScope::kScene);
 	CHECK(request.model == "meshes/wrcity");
 	CHECK(MatchesModelPath("Meshes/WRCity01.nif", request.model));
 	CHECK(!MatchesModelPath(nullptr, request.model));
